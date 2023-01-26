@@ -1,0 +1,7 @@
+/.idea
+/stockfish_15_win_x64_avx2
+/stockfish_15_win_x64_popcnt
+/venv
+/__pycache__
+/position_cache
+/my_pgns
