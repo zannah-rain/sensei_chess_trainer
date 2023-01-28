@@ -103,6 +103,7 @@ class zPosition:
         if self.engine_evaluation_depth < depth:
             engine_eval = engine.analyse(self.board, chess.engine.Limit(depth=depth), multipv=multipv)
             engine_eval[0]["score"] = engine_eval[0]["score"].white().wdl().expectation()  # Converting to json friendly format
+            if "pv" in engine_eval[0].keys():
             engine_eval[0]["pv"] = [i.uci() for i in engine_eval[0]["pv"]]  # Converting to json friendly format
             if "currmove" in engine_eval[0].keys():
                 engine_eval[0]["currmove"] = engine_eval[0]["currmove"].uci()
