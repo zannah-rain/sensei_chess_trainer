@@ -8,6 +8,7 @@ import pathlib
 import logging
 import requests
 import time
+from datetime import datetime
 
 
 logging.basicConfig(level=logging.INFO)
@@ -104,12 +105,14 @@ class zPosition:
             engine_eval = engine.analyse(self.board, chess.engine.Limit(depth=depth), multipv=multipv)
             engine_eval[0]["score"] = engine_eval[0]["score"].white().wdl().expectation()  # Converting to json friendly format
             if "pv" in engine_eval[0].keys():
-            engine_eval[0]["pv"] = [i.uci() for i in engine_eval[0]["pv"]]  # Converting to json friendly format
+                engine_eval[0]["pv"] = [i.uci() for i in engine_eval[0]["pv"]]  # Converting to json friendly format
             if "currmove" in engine_eval[0].keys():
                 engine_eval[0]["currmove"] = engine_eval[0]["currmove"].uci()
             self._cached_engine_evaluation = engine_eval
             self.save()
-            logging.info(f"Saved new engine evaluation of FEN: {self.fen}. Eval: {self._cached_engine_evaluation}")
+            this_score = engine_eval[0]["score"]
+            logging.info(f"Saved new engine evaluation of FEN: {self.fen}. Eval: {this_score}")
+            logging.debug(f"Full evaluation: {self._cached_engine_evaluation}")
         
         return self._cached_engine_evaluation[0]["score"]
     
@@ -166,7 +169,7 @@ class zPosition:
         url += f'play={play}&'
         url += f'fen={self.fen}'
 
-        logging.info(f"Downloading lichess stats for FEN: {self.fen}")
+        logging.debug(f"Downloading lichess stats for FEN: {self.fen}")
 
         while True:
             r = requests.get(url)
@@ -235,8 +238,10 @@ class zPosition:
                                                  side=chess.WHITE, 
                                                  min_depth=35, 
                                                  min_likelihood=0.1,
+                                                 min_games=1000,
                                                  engine_node_weight=0.01,
-                                                 lichess_game_weight=1):
+                                                 lichess_game_weight=1,
+                                                 engine_weight_capcollar=((1_000, (1.0, 1.0)), (10_000, (0.75, 1.0)), (100_000, (0.35, 0.65)), (1_000_000, (0.1, 0.2)), (1_000_000_000, (0.005, 0.01)))):
         """
         Our best move is a weighted average of the engine evaluation and the lichess historic evaluation, depending on how many games & nodes on each side.
         :param side: Which side to find the optimum moves for. The resulting repertoire will include all common moves from the other side.
@@ -245,12 +250,16 @@ class zPosition:
         :param current_likelihood: The current likelihood of observing the variation up until this position. Do not set this manually.
         :param engine_node_weight: The weight assigned to the engine evaluation for each node scanned
         :param lichess_game_weight: The weight assigned to the lichess evaluation for each historic lichess game
+        :param engine_weight_capcollar: The minimum and maximum weight given to the engine prediction compared to the lichess evaluation at different amounts of lichess game totals. Linear interp between them.
+        :param min_games: The minimum number of games to trust lichess move chance %
         """
 
         game = chess.pgn.Game.from_board(self.board)
         total_progress = 0
         
         def iterate_game(game_node: chess.pgn.GameNode, total_progress, current_likelihood=1):
+            initial_progress = total_progress
+
             this_fen = game_node.board().fen()
             this_position = zPosition(fen=this_fen)
             if game_node.turn() == side:
@@ -262,32 +271,50 @@ class zPosition:
                     candidate_position = this_position.position_from_move(candidate_move.uci())
                     candidate_engine_evaluation = candidate_position.engine_evaluation(engine=engine, depth=min_depth)  # Could be min_depth -1 but this will probably save processing in long run
                     candidate_lichess_evaluation = candidate_position.lichess_white_evaluation_historic
-                    candidate_weighted_evaluation = ((candidate_engine_evaluation * candidate_position.engine_evaluation_nodes * engine_node_weight) + \
-                                                     (candidate_lichess_evaluation * candidate_position.lichess_game_count * lichess_game_weight)) / \
-                                                    (candidate_position.engine_evaluation_nodes * engine_node_weight + candidate_position.lichess_game_count * lichess_game_weight)
+                    
+                    for lower_weights, upper_weights in zip(engine_weight_capcollar[:-1], engine_weight_capcollar[1:]):
+                        if candidate_position.lichess_game_count < upper_weights[0]:
+                            this_bounded_game_count = max(candidate_position.lichess_game_count, lower_weights[0])
+                            game_count_weight_point = (this_bounded_game_count - lower_weights[0]) / (upper_weights[0] - lower_weights[0])
+                            this_cap = upper_weights[1][1] * game_count_weight_point + lower_weights[1][1] * (1 - game_count_weight_point)
+                            this_collar = upper_weights[1][0] * game_count_weight_point + lower_weights[1][0] * (1 - game_count_weight_point)
+                            break
+
+                    this_engine_weight = candidate_position.engine_evaluation_nodes * engine_node_weight / (candidate_position.engine_evaluation_nodes * engine_node_weight + candidate_position.lichess_game_count * lichess_game_weight)
+                    this_engine_weight = min(max(this_engine_weight, this_collar), this_cap)
+
+                    candidate_weighted_evaluation = (candidate_engine_evaluation * this_engine_weight) + (candidate_lichess_evaluation * (1 - this_engine_weight))
 
                     if best_move_evaluation is None:
                         best_move_so_far = candidate_move
                         best_move_evaluation = candidate_weighted_evaluation
+                        best_engine_weight = this_engine_weight
                         continue
                     if side == chess.WHITE:
                         if best_move_evaluation < candidate_weighted_evaluation:
                             best_move_so_far = candidate_move
                             best_move_evaluation = candidate_weighted_evaluation
+                            best_engine_weight = this_engine_weight
                     else:
                         if best_move_evaluation > candidate_weighted_evaluation:
                             best_move_so_far = candidate_move
                             best_move_evaluation = candidate_weighted_evaluation
+                            best_engine_weight = this_engine_weight
                 
                 if best_move_so_far is not None:
                     best_position = this_position.position_from_move(best_move_so_far.uci())
                     logging.info(f"Appending best weighted move after FEN: {this_fen} - {best_move_so_far.uci()}")
                     comment=f"Weighted move. E: {best_move_evaluation}. EE: {best_position.engine_evaluation(engine=engine, depth=min_depth)}. D: {best_position.engine_evaluation_depth}. "
-                    comment+=f"Node weight @{engine_node_weight}: {best_position.engine_evaluation_nodes * engine_node_weight}. Games: {best_position.lichess_game_count}. F: {current_likelihood}."
+                    comment+=f"Node weight @{engine_node_weight}: {best_position.engine_evaluation_nodes * engine_node_weight}. Games: {best_position.lichess_game_count}. EW: {best_engine_weight} F: {current_likelihood}."
                     next_node = game_node.add_variation(best_move_so_far,
                                                         comment=comment)
                     total_progress = iterate_game(next_node, total_progress=total_progress, current_likelihood=current_likelihood)
             else:
+                if this_position.lichess_game_count < min_games:
+                    total_progress += current_likelihood
+                    logging.info(f"No longer exploring after FEN: {this_fen} as only {this_position.lichess_game_count} games (< min_games of {min_games})")
+                    return total_progress
+
                 has_subvariations = False
                 for move, frequency in this_position.lichess_move_frequencies.items():
                     total_frequency = frequency * current_likelihood
@@ -300,11 +327,26 @@ class zPosition:
                 if not has_subvariations:
                     total_progress += current_likelihood
                 else:
+                    total_progress = initial_progress + current_likelihood
                     logging.info(f"Total progress: {total_progress*100}%")
 
             return total_progress
 
         iterate_game(game, total_progress=total_progress)
+        game.headers["Event"] = f"create_weighted_average_opening_training"
+        game.headers["Date"] = datetime.now().__str__()
+        if side == chess.WHITE:
+            game.headers["White"] = "ZannahRain"
+        else:
+            game.headers["Black"] = "ZannahRain"
+
+        game.headers["min_depth"] = str(min_depth)
+        game.headers["min_likelihood"] = str(min_likelihood)
+        game.headers["min_games"] = str(min_games)
+        game.headers["engine_node_weight"] = str(engine_node_weight)
+        game.headers["lichess_game_weight"] = str(lichess_game_weight)
+        game.headers["engine_weight_capcollar"] = engine_weight_capcollar
+
         return game
 
 if __name__ == "__main__":
@@ -320,8 +362,8 @@ if __name__ == "__main__":
     # Depth of 15 can hit lichess rate limit, 20 seems like the best 'quick' number
     # Big time increase after 40
     # 35 seems doable for smaller repertoires
-    MIN_DEPTH = 40
-    MIN_LIKELIHOOD = 0.01
+    MIN_DEPTH = 20
+    MIN_LIKELIHOOD = 0.009
     OUT_POSTFIX = "_repertoire"
 
     # For weighted average repertoire
