@@ -94,6 +94,9 @@ class zPosition:
         if self._cached_engine_evaluation is None:
             return 0
 
+        if "nodes" not in self._cached_engine_evaluation[0].keys():
+            return 1  # Seems to happen when the engine found a forced win/loss
+
         return self._cached_engine_evaluation[0]["nodes"]
 
     def engine_evaluation(self, engine, depth=35, multipv=1):
