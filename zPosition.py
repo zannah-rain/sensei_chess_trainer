@@ -279,6 +279,10 @@ class zPosition:
                             this_cap = upper_weights[1][1] * game_count_weight_point + lower_weights[1][1] * (1 - game_count_weight_point)
                             this_collar = upper_weights[1][0] * game_count_weight_point + lower_weights[1][0] * (1 - game_count_weight_point)
                             break
+                    else:
+                        # Above the highest band
+                        this_cap = engine_weight_capcollar[-1][1][1]
+                        this_collar = engine_weight_capcollar[-1][1][0]
 
                     this_engine_weight = candidate_position.engine_evaluation_nodes * engine_node_weight / (candidate_position.engine_evaluation_nodes * engine_node_weight + candidate_position.lichess_game_count * lichess_game_weight)
                     this_engine_weight = min(max(this_engine_weight, this_collar), this_cap)
