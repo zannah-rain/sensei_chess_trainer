@@ -35,6 +35,7 @@ class zPosition:
         self._cached_engine_evaluation = None
 
         self._cached_lichess_stats = None
+        self._cached_lichess_master_stats = None
 
         # For representing internal state of board
         # Can't use a trivial BaseBoard, as we need extra information about whether people can still castle etc.
@@ -58,10 +59,29 @@ class zPosition:
         return self._cached_lichess_stats
     
     @property
+    def lichess_master_stats(self):
+        if self._cached_lichess_master_stats is None:
+            self._cached_lichess_master_stats = self.call_lichess_api(master=True)
+            self.save()
+            logging.debug(f"Cached lichess master stats for FEN: {self.fen}")
+        
+        return self._cached_lichess_master_stats
+    
+    @property
     def lichess_move_frequencies(self):
         return {move["uci"]: (move["white"] + move["black"] + move["draws"]) / self.lichess_game_count
                 for move in self.lichess_stats["moves"]}
     
+    @property
+    def lichess_master_white_evaluation_historic(self):
+        if self.lichess_master_game_count == 0:
+            return 0.5
+        return (self.lichess_master_stats["white"] + self.lichess_master_stats["draws"] / 2) / self.lichess_master_game_count
+    
+    @property
+    def lichess_master_game_count(self):
+        return self.lichess_master_stats["white"] + self.lichess_master_stats["black"] + self.lichess_master_stats["draws"]
+
     @property
     def lichess_white_evaluation_historic(self):
         if self.lichess_game_count == 0:
@@ -128,7 +148,8 @@ class zPosition:
             "children": self.children,
             "comment": self.comment,
             "_cached_engine_evaluation": self._cached_engine_evaluation,
-            "_cached_lichess_stats": self._cached_lichess_stats
+            "_cached_lichess_stats": self._cached_lichess_stats,
+            "_cached_lichess_master_stats": self._cached_lichess_master_stats
         }
     
     def from_dict(self, x):
@@ -140,6 +161,8 @@ class zPosition:
 
         if "_cached_lichess_stats" in x.keys():
             self._cached_lichess_stats = x["_cached_lichess_stats"]
+        if "_cached_lichess_master_stats" in x.keys():
+            self._cached_lichess_master_stats = x["_cached_lichess_master_stats"]
 
     def save(self):
         with open(self.cache_path, "w") as f:
@@ -150,7 +173,8 @@ class zPosition:
         with open(file, "r") as f:
             return zPosition.from_dict(json.load(fp=f))
 
-    def call_lichess_api(self):
+    def call_lichess_api(self, master : bool = False):
+        if master == False:
         variant = "standard"
         speeds = ["ultraBullet", "bullet", "blitz", "rapid", "classical", "correspondence"]
         ratings = ["1600", "1800", "2000", "2200", "2500"]
@@ -170,6 +194,19 @@ class zPosition:
         url += f'fen={self.fen}'
 
         logging.debug(f"Downloading lichess stats for FEN: {self.fen}")
+        else:
+            moves = 50
+            recentGames = 0
+            topGames = 0
+            play = ""
+            
+            url = 'https://explorer.lichess.ovh/masters?'
+            url += f'topGames={topGames}&'
+            url += f'moves={moves}&'
+            url += f'play={play}&'
+            url += f'fen={self.fen}'
+
+            logging.debug(f"Downloading lichess master stats for FEN: {self.fen}")
 
         while True:
             r = requests.get(url)
