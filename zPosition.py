@@ -275,7 +275,7 @@ class zPosition:
                                                  side=chess.WHITE, 
                                                  min_depth=35, 
                                                  min_likelihood=0.1,
-                                                 min_games=1000,
+                                                 min_games=250,
                                                  engine_node_weight=0.01,
                                                  lichess_game_weight=1,
                                                  engine_weight_capcollar=((1_000, (1.0, 1.0)), (10_000, (0.75, 1.0)), (100_000, (0.35, 0.65)), (1_000_000, (0.1, 0.2)), (1_000_000_000, (0.005, 0.01)))):
