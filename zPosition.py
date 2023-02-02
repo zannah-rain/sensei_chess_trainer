@@ -9,6 +9,7 @@ import logging
 import requests
 import time
 from datetime import datetime
+import pandas as pd
 
 
 logging.basicConfig(level=logging.INFO)
@@ -48,6 +49,19 @@ class zPosition:
                 self.from_dict(json.load(f))
         else:
             logging.debug(f"Initialising FEN {self.fen} from scratch.")
+
+    @staticmethod
+    def book_stats():
+        sharpnesses = []
+        for file_id, file in enumerate(pathlib.Path("position_cache/").glob("*.fen")):
+            fen = file.name.replace(".fen", "").replace("_", "/")
+            position = zPosition(fen=fen)
+            children_min_depth = position.children_min_engine_depth()
+            if children_min_depth > 0:
+                sharpnesses.append(position.sharpness(min_depth=children_min_depth))
+            if len(sharpnesses) % 1000 == 1:
+                logging.info(f"{len(sharpnesses)} positions: Average sharpness = {sum(sharpnesses) / len(sharpnesses)}")
+        return pd.Series(sharpnesses, name="sharpness")
         
     @property
     def lichess_stats(self):
@@ -321,11 +335,12 @@ class zPosition:
                                                  side=chess.WHITE, 
                                                  min_depth=35, 
                                                  min_likelihood=0.1,
+                                                 sharpness_baseline=0.178,
                                                  min_games=250,
                                                  engine_node_weight=0.01,
                                                  lichess_game_weight=0,
                                                  lichess_master_game_weight=1,
-                                                 engine_weight_capcollar=((30, (1.0, 1.0)), (100, (0.9, 1.0)), (500, (0.8, 0.99)), (1_000, (0.35, 0.80)), (10_000, (0.2, 0.35)), (100_000, (0.1, 0.2)))):
+                                                 engine_weight_capcollar=((30, (1.0, 1.0)), (100, (0.9, 1.0)), (500, (0.8, 0.99)), (1_000, (0.6, 0.80)), (10_000, (0.4, 0.6)), (100_000, (0.2, 0.4)))):
         """
         Our best move is a weighted average of the engine evaluation and the lichess historic evaluation, depending on how many games & nodes on each side.
         :param side: Which side to find the optimum moves for. The resulting repertoire will include all common moves from the other side.
@@ -337,12 +352,16 @@ class zPosition:
         :param lichess_master_game_weight: The weight assigned to the lichess master evaluation for each historic lichess master game
         :param engine_weight_capcollar: The minimum and maximum weight given to the engine prediction compared to the lichess evaluation at different amounts of lichess game totals. Linear interp between them.
         :param min_games: The minimum number of games to trust lichess move chance %
+        :param sharpness_baseline: Sharpness is approximately ~0.178 for a closed opening like the English, and ~0.221 for the sicilian defence
+            Sharper positions will be explored more thoroughly, proportional to the overall sharpness of the line.
         """
 
         game = chess.pgn.Game.from_board(self.board)
         total_progress = 0
+        total_sharpness = 0
+        total_sharpness_moves = 0
         
-        def iterate_game(game_node: chess.pgn.GameNode, total_progress, current_likelihood=1):
+        def iterate_game(game_node: chess.pgn.GameNode, total_progress, total_sharpness, total_sharpness_moves, current_likelihood=1):
             initial_progress = total_progress
 
             this_fen = game_node.board().fen()
@@ -358,7 +377,7 @@ class zPosition:
                     comment=f"Engine move. EE: {this_position.engine_evaluation(engine=engine, depth=min_depth):.3f}. D: {this_position.engine_evaluation_depth}. N: {this_position.engine_evaluation_nodes}. F: {current_likelihood:.4f}."
                     next_node = game_node.add_variation(chess.Move.from_uci(this_position.best_engine_move(engine=engine, depth=min_depth)),
                                                         comment=comment)
-                    total_progress = iterate_game(next_node, total_progress=total_progress, current_likelihood=current_likelihood)
+                    total_progress = iterate_game(next_node, total_progress=total_progress, current_likelihood=current_likelihood, total_sharpness=total_sharpness, total_sharpness_moves=total_sharpness_moves)
                 else:
                     # Have to evaluate all positions properly and then adjust each evaluation to a 'loss from best' basis
                     candidates_moves = game_node.board().legal_moves
@@ -452,15 +471,17 @@ class zPosition:
                                 best_lichess_master_weight = this_lichess_master_weight
                     
                     if best_move_so_far is not None:
+                        total_sharpness_moves += 1
+                        total_sharpness += this_position.sharpness(min_depth=min_depth)
                         best_position = this_position.position_from_move(best_move_so_far.uci())
-                        logging.info(f"Appending best weighted move after FEN: {this_fen} - {best_move_so_far.uci()}")
+                        logging.info(f"Appending best weighted move after FEN: {this_fen} - {best_move_so_far.uci()} - Sharpness {this_position.sharpness(min_depth=min_depth):.3f}")
                         comment=f"WEDel: {best_move_evaluation*100:.1f}. \n"
                         comment+=f"EEDel: {candidates_engine_evaluations_delta[best_move_so_far]*100:.1f}. MEDel: {candidates_lichess_master_evaluations_deltas[best_move_so_far]*100:.1f}. LEDel: {candidates_lichess_evaluations_deltas[best_move_so_far]*100:.1f}.\n"
                         comment+=f"EE: {candidates_engine_evaluations[best_move_so_far]*100:.1f}. ME: {candidates_lichess_master_evaluations[best_move_so_far]*100:.1f}. LE: {candidates_lichess_evaluations[best_move_so_far]*100:.1f}.\n"
-                        comment+=f"MG: {best_position.lichess_master_game_count}. LG: {best_position.lichess_game_count}. EW: {best_engine_weight:.2f}. F%: {current_likelihood*100:.2f}. D: {best_position.engine_evaluation_depth}."
+                        comment+=f"MG: {best_position.lichess_master_game_count}. LG: {best_position.lichess_game_count}. EW: {best_engine_weight:.2f}. F%: {current_likelihood*100:.2f}. D: {best_position.engine_evaluation_depth}. Sharp: {this_position.sharpness(min_depth=min_depth):.3f}"
                         next_node = game_node.add_variation(best_move_so_far,
                                                             comment=comment)
-                        total_progress = iterate_game(next_node, total_progress=total_progress, current_likelihood=current_likelihood)
+                        total_progress = iterate_game(next_node, total_progress=total_progress, current_likelihood=current_likelihood, total_sharpness=total_sharpness, total_sharpness_moves=total_sharpness_moves)
             else:
                 if this_position.lichess_game_count < min_games:
                     total_progress += current_likelihood
@@ -470,12 +491,22 @@ class zPosition:
                 has_subvariations = False
                 for move, frequency in this_position.lichess_move_frequencies.items():
                     total_frequency = frequency * current_likelihood
-                    if total_frequency >= min_likelihood:
+                    next_position = this_position.position_from_move(move)
+                    frequent_enough = total_frequency >= min_likelihood
+                    known_sharpness = False
+                    if not frequent_enough:
+                        # Checking sharpness is slow otherwise
+                        frequent_enough = total_frequency * next_position.sharpness(engine=engine, min_depth=10) / sharpness_baseline >= min_likelihood
+                        known_sharpness = True
+                    if frequent_enough:
                         has_subvariations = True
-                        logging.info(f"Appending common enough response ({total_frequency*100:.2f}%) after FEN: {this_fen} - {move}")
-                        comment=f"Common response. LE: {this_position.lichess_white_evaluation_historic*100:.1f}. LM: {this_position.lichess_master_white_evaluation_historic*100:.1f}. LN: {this_position.lichess_game_count}. F%: {total_frequency*100:.2f}."
+                        if known_sharpness:
+                            logging.info(f"Appending common enough response ({total_frequency*100:.2f}%) after FEN: {this_fen} - {move} - Sharpness: {next_position.sharpness(engine=engine, min_depth=10)}")
+                        else:
+                            logging.info(f"Appending common enough response ({total_frequency*100:.2f}%) after FEN: {this_fen} - {move}")
+                        comment=f"Common response. LE: {next_position.lichess_white_evaluation_historic*100:.1f}. LM: {next_position.lichess_master_white_evaluation_historic*100:.1f}. LN: {next_position.lichess_game_count}. F%: {total_frequency*100:.2f}."
                         next_node = game_node.add_variation(chess.Move.from_uci(move), comment=comment)
-                        total_progress = iterate_game(next_node, total_progress=total_progress, current_likelihood=total_frequency)
+                        total_progress = iterate_game(next_node, total_progress=total_progress, current_likelihood=total_frequency, total_sharpness=total_sharpness, total_sharpness_moves=total_sharpness_moves)
                 if not has_subvariations:
                     total_progress += current_likelihood
                 else:
@@ -484,7 +515,7 @@ class zPosition:
 
             return total_progress
 
-        iterate_game(game, total_progress=total_progress)
+        iterate_game(game, total_progress=total_progress, total_sharpness=total_sharpness, total_sharpness_moves=total_sharpness_moves)
         game.headers["Event"] = f"create_weighted_average_opening_training"
         game.headers["Date"] = datetime.now().__str__()
         if side == chess.WHITE:
@@ -511,12 +542,12 @@ if __name__ == "__main__":
     engine.configure({"Threads": threads})
 
     a = zPosition()
-
+ 
     # Depth of 21 can hit lichess rate limit, 22 seems like the best 'quick' number
     # Big time increase after 40
     # 35 seems doable for smaller repertoires
-    MIN_DEPTH = 24
-    MIN_LIKELIHOOD = 0.009   
+    MIN_DEPTH = 25
+    MIN_LIKELIHOOD = 0.005
     OUT_POSTFIX = "_repertoire"
 
     # For weighted average repertoire
