@@ -98,10 +98,14 @@ class zPosition:
             self._board = chess.Board(fen=self.fen)
         return self._board
 
+    @staticmethod
+    def fen_cache_path(fen: str) -> pathlib.Path:
+        path_safe_fen = fen.replace("/", "_")
+        return pathlib.Path(f"position_cache/{path_safe_fen}.fen")
+
     @property
     def cache_path(self) -> pathlib.Path:
-        path_safe_fen = self.fen.replace("/", "_")
-        return pathlib.Path(f"position_cache/{path_safe_fen}.fen")
+        return zPosition.fen_cache_path(fen=self.fen)
     
     @property
     def engine_evaluation_depth(self):
@@ -269,6 +273,48 @@ class zPosition:
 
         iterate_game(game, total_progress=total_progress)
         return game
+    
+    @property
+    def legal_moves(self) -> chess.LegalMoveGenerator:
+        return self.board.legal_moves
+
+    @property
+    def turn(self) -> int:
+        """chess.WHITE or chess.BLACK"""
+        return self.board.turn
+
+    def children_min_engine_depth(self) -> int:
+        """The minimum engine depth child nodes have already been evaluated to."""
+        # Helpful to do some lazy evaluation sometimes
+        legal_moves = self.legal_moves
+        candidates_positions = {move: self.position_from_move(move.uci()) for move in legal_moves}
+        if len(candidates_positions) == 0:
+            return 0
+        evaluated_depths = [i.engine_evaluation_depth for i in candidates_positions.values()]
+        return min(evaluated_depths)
+            
+
+    def sharpness(self,
+                  engine=None,
+                  heuristic="null_model_loss",
+                  min_depth=25):
+        """
+        Estimate the sharpness of the position.
+        heuristic=null_model_loss - Sharpness is defined as the average engine evaluation loss when playing a random move rather than the best move.
+        So for example:
+        - A position with one guaranteed winning move while all others are guaranteed losing has a sharpness of ~1
+        - A position where all moves are exactly the same has a sharpness of 0
+        """
+        legal_moves = self.legal_moves
+        candidates_positions = {move: self.position_from_move(move.uci()) for move in legal_moves}
+        candidates_evaluations = {move: candidates_positions[move].engine_evaluation(engine=engine, depth=min_depth) for move in legal_moves}
+        if self.turn == chess.BLACK:
+            # Best move is the lowest evaluated
+            candidates_evaluations = {move: -evaluation for move, evaluation in candidates_evaluations.items()}
+        best_eval = max(candidates_evaluations.values())
+        average_eval = sum(candidates_evaluations.values()) / len(candidates_evaluations)
+        proportional_sharpness = best_eval - average_eval
+        return proportional_sharpness / (1 - proportional_sharpness)
 
     def create_weighted_average_opening_training(self, 
                                                  engine, 
