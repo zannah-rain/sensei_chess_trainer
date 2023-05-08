@@ -47,6 +47,9 @@ import chess.polyglot
 import logging
 import platform as sys_plat
 from utils.constants import *
+from zPosition import zPosition
+from pathlib import Path
+from typing import Dict
 
 logging.basicConfig(level=logging.INFO)
 
@@ -63,6 +66,7 @@ MAX_DEPTH = 1000
 
 # (1) Mode: Neutral
 menu_def_neutral = [
+        ["File", ["Open .pgn"]],
         ['&Mode', ['Play']],
         ['Boar&d', ['Flip', 'Color', ['Brown::board_color_k',
                                       'Blue::board_color_k',
@@ -103,23 +107,50 @@ class EasyChessGui:
                                 auto_size_buttons=False,
                                 icon=ico_path[platform]['pecg']).finalize()
         
-        self.board = chess.Board(fen=fen)
+        self.game = chess.pgn.Game()
+        self.game_node = self.game
 
         # Tracking any short term variables in between window reads
         self.move_state = 0
         self.move_from = None
+
+    @property
+    def game(self) -> chess.pgn.Game:
+        return self._game
+    
+    @game.setter
+    def game(self, value: chess.pgn.Game):
+        self._game = value
+        self.game_node = self.game
+
+    @property
+    def game_node(self) -> chess.pgn.GameNode:
+        return self._game_node
+    
+    @game_node.setter
+    def game_node(self, value: chess.pgn.GameNode):
+
+        self.redraw_board(self.window)
+        self._game_node = value
+        self._psg_board = self.fen_to_psg_board()
+        self.redraw_board(self.window)
+
+        if isinstance(self._game_node, chess.pgn.ChildNode):
+            # Has a parent node and 'move' that we can highlight
+            move = self._game_node.move
+            if move is not None:
+                self.change_square_color(self.window, 7 - chess.square_rank(move.from_square), chess.square_file(move.from_square))
+                self.change_square_color(self.window, 7 - chess.square_rank(move.to_square), chess.square_file(move.to_square))
     
     @property
     def board(self) -> chess.Board:
         # Accessor as changes to this board should prompt re-drawing and stuff like that
         # Don't want in general to directly modify it
-        return self._board
+        return self._game_node.board().copy()
     
-    @board.setter
-    def board(self, value: chess.Board):
-        self._board = value.copy()
-        self._psg_board = self.fen_to_psg_board()
-        self.redraw_board(self.window)
+    @property
+    def zpos(self) -> zPosition:
+        return zPosition(fen=self.fen)
 
     @property
     def psg_board(self):
@@ -148,6 +179,12 @@ class EasyChessGui:
 
         window.Close()
         return w
+    
+    def file_picker(self, prompt) -> Path:
+        event, values = sg.Window('Login Window',
+                  [[sg.T(prompt), sg.FileBrowse()],
+                  [sg.B('OK')]]).read(close=True)
+        return event, values
 
     def fen_to_psg_board(self):
         """ Update psg_board based on FEN """
@@ -322,7 +359,7 @@ class EasyChessGui:
 
         return pyc_promo, psg_promo
     
-    def get_human_move(self, window_read_result, board):
+    def get_human_move(self, window_read_result):
         button, value = window_read_result
 
         # Mode: Play, stm: User, user starts moving
@@ -337,7 +374,7 @@ class EasyChessGui:
                 self.change_square_color(self.window, fr_row, fr_col)
 
                 self.move_state = 1
-                moved_piece = board.piece_type_at(chess.square(fr_col, 7-fr_row))  # Pawn=1
+                moved_piece = self.board.piece_type_at(chess.square(fr_col, 7-fr_row))  # Pawn=1
 
                 return None
 
@@ -346,7 +383,7 @@ class EasyChessGui:
                 move_to = button
                 fr_row, fr_col = self.move_from
                 to_row, to_col = move_to
-                moved_piece = board.piece_type_at(chess.square(fr_col, 7-fr_row))
+                moved_piece = self.board.piece_type_at(chess.square(fr_col, 7-fr_row))
                 button_square = self.window.find_element(key=(fr_row, fr_col))
 
                 # If move is cancelled, pressing same button twice
@@ -370,23 +407,15 @@ class EasyChessGui:
                 to_sq = chess.square(to_col, 7-to_row)
 
                 # If user move is a promote
-                if self.relative_row(to_sq, board.turn) == RANK_8 and moved_piece == chess.PAWN:
-                    pyc_promo, psg_promo = self.get_promo_piece(user_move, board.turn, True)
+                if self.relative_row(to_sq, self.board.turn) == RANK_8 and moved_piece == chess.PAWN:
+                    pyc_promo, psg_promo = self.get_promo_piece(user_move, self.board.turn, True)
                     user_move = chess.Move(fr_sq, to_sq, promotion=pyc_promo)
                 else:
                     user_move = chess.Move(fr_sq, to_sq)
 
                 # Check if user move is legal
-                if user_move in list(board.legal_moves):
-                    self.redraw_board(self.window)
-
-                    board.push(user_move)
-                    self.board = board
-
-                    # Change the color of the "fr" and "to" board squares
-                    self.change_square_color(self.window, fr_row, fr_col)
-                    self.change_square_color(self.window, to_row, to_col)
-                    # Human has done its move
+                if user_move in list(self.board.legal_moves):
+                    self.play_move(move=user_move)
 
                     self.move_from = None
                     self.move_state = 0
@@ -404,7 +433,19 @@ class EasyChessGui:
                     return None
                 
         return window_read_result
+    
+    @property
+    def moves(self) -> Dict[chess.Move, chess.pgn.ChildNode]:
+        """Return a dict of all sub-variations from this position, keyed by the move that results in them."""
+        return {i.move: i for i in self.game_node.variations}
                 
+    def play_move(self, move: chess.Move):
+        """Update the current board state with the given move, highlighting what's changed."""
+        if move in self.moves.keys():
+            self.game_node = self.moves[move]
+            return None
+        self.game_node = self.game_node.add_variation(move=move)
+        return None
 
     def create_board(self, is_user_white=True):
         """
@@ -455,20 +496,22 @@ class EasyChessGui:
         # Define board
         board_layout = self.create_board(is_user_white)
 
-        board_tab = [[sg.Column(board_layout)], 
-                     [sg.Button("Engine Move")]]
+        board_tab = [[sg.Column(board_layout)]]
 
         self.menu_elem = sg.Menu(menu_def_neutral, tearoff=False)
 
         # White board layout, mode: Neutral
         layout = [
                 [self.menu_elem],
-                [sg.Column(board_tab)]
+                [sg.Column(board_tab), 
+                 sg.VSeparator(), 
+                 sg.Column([[sg.Button("Engine Move")], 
+                            [sg.Button("<-"), sg.Button("->")]])]
         ]
 
         return layout
 
-    def main_loop(self):
+    def main_loop(self, engines):
         """
         Build GUI, read user and engine config files and take user inputs.
 
@@ -489,7 +532,7 @@ class EasyChessGui:
                 logging.info('Quit app from main loop, X is pressed.')
                 break
 
-            window_read_result = self.get_human_move(window_read_result=window_read_result, board=board)
+            window_read_result = self.get_human_move(window_read_result=window_read_result)
             if window_read_result is None:
                 continue
             if type(window_read_result) == chess.Move:
@@ -497,7 +540,32 @@ class EasyChessGui:
                 continue
 
             if button == "Engine Move":
-                logging.warn("Fbalskjdnas")
+                self.play_move(self.zpos.best_engine_move(engine=engines["stockfish"], depth=20))
+                continue
+
+            if button == "Open .pgn":
+                with open(self.file_picker(prompt=".pgn file:")[1]["Browse"], "r") as f:
+                    self.game = chess.pgn.read_game(f)
+                continue
+
+            if button == "->":
+                next_node = self.game_node.next()
+                if next_node is not None:
+                    self.game_node = next_node
+                else:
+                    logging.info("End of game")
+                continue
+
+            if button == "<-":
+                if not isinstance(self.game_node, chess.pgn.ChildNode):
+                    logging.warning("Can't get parent node of non-ChildNode game_node")
+                    continue
+                
+                prev_node = self.game_node.parent
+                if prev_node is not None:
+                    self.game_node = prev_node
+                continue
+
 
             # Mode: Neutral
             if button == 'Flip':
@@ -508,9 +576,19 @@ class EasyChessGui:
 def main():
     theme = 'Reddit'
 
+    import psutil
+    engines = {
+        "stockfish": chess.engine.SimpleEngine.popen_uci(r"E:\\chess\\stockfish_15_win_x64_popcnt\\stockfish_15_x64_popcnt.exe"),
+        "leela": chess.engine.SimpleEngine.popen_uci(r"C:\\Users\\LZoe\\Desktop\\Leela\\lc0.exe")
+    }
+    threads: int = int(psutil.cpu_count(logical=True) - 3)  # almost all logical CPU cores
+    hash: int = int(psutil.virtual_memory().available / 1024 / 1024 * 0.3)  # 75% of available RAM
+    engines["stockfish"].configure({"Hash": hash})
+    engines["stockfish"].configure({"Threads": threads})
+
     pecg = EasyChessGui(theme)
 
-    pecg.main_loop()
+    pecg.main_loop(engines=engines)
 
 
 if __name__ == "__main__":
