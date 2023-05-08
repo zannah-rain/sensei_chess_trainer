@@ -34,8 +34,9 @@ class zPosition:
         self.children = children
         self.comment = comment
 
-        self._cached_engine_evaluation = None
+        self._cached_engine_evaluation = None  # Stockfish
         self._cached_engine_multidepth_evaluations = None  # List, ith element is a sublist of (best move, evaluation) when analysing at depth i (for sharpness metric)
+        self._cached_leela_evaluation = None
 
         self._cached_lichess_stats = None
         self._cached_lichess_master_stats = None
@@ -57,14 +58,14 @@ class zPosition:
             logging.debug(f"Initialising FEN {self.fen} from scratch.")
 
     @staticmethod
-    def book_stats():
+    def book_stats(engines):
         sharpnesses = []
         for file_id, file in enumerate(pathlib.Path("position_cache/").glob("*.fen")):
             fen = file.name.replace(".fen", "").replace("_", "/")
             position = zPosition(fen=fen)
             children_min_depth = position.children_min_engine_depth()
             if children_min_depth > 0:
-                sharpnesses.append(position.sharpness(engine=engine, min_depth=children_min_depth, heuristic="evaluation_depth_analysis"))
+                sharpnesses.append(position.sharpness(engine=engines["stockfish"], min_depth=children_min_depth, heuristic="evaluation_depth_analysis"))
             if len(sharpnesses) % 1000 == 1:
                 logging.info(f"{len(sharpnesses)} positions: Average sharpness = {sum(sharpnesses) / len(sharpnesses)}")
         return pd.Series(sharpnesses, name="sharpness")
@@ -82,7 +83,10 @@ class zPosition:
     @property
     def lichess_master_stats(self):
         if self._cached_lichess_master_stats is None:
-            self._cached_lichess_master_stats = self.call_lichess_api(master=True)
+            try:
+                self._cached_lichess_master_stats = self.call_lichess_api(master=True)
+            except:
+                pass
             if self._cached_lichess_master_stats is not None:
                 self.save()
                 logging.debug(f"Cached lichess master stats for FEN: {self.fen}")
@@ -105,8 +109,17 @@ class zPosition:
     
     @property
     def lichess_move_frequencies(self):
+        if self.lichess_stats is None:
+            return None
         return {move["uci"]: (move["white"] + move["black"] + move["draws"]) / self.lichess_game_count
                 for move in self.lichess_stats["moves"]}
+    
+    @property
+    def lichess_master_move_frequencies(self):
+        if self.lichess_master_stats is None:
+            return None
+        return {move["uci"]: (move["white"] + move["black"] + move["draws"]) / self.lichess_master_game_count
+                for move in self.lichess_master_stats["moves"]}
     
     @property
     def lichess_master_white_evaluation_historic(self):
@@ -173,6 +186,24 @@ class zPosition:
 
         return nodes
     
+    @property
+    def leela_evaluation_depth(self):
+        depth = 0
+
+        if self._cached_leela_evaluation is not None:
+            depth = max(depth, self._cached_leela_evaluation[0]["depth"])
+
+        return depth
+    
+    @property
+    def leela_evaluation_nodes(self):
+        nodes = 0
+
+        if self._cached_leela_evaluation is not None:
+            nodes = max(nodes, self._cached_leela_evaluation[0]["nodes"])
+        
+        return nodes
+    
     def engine_multidepth_evaluations(self, engine, depths = [1, 2, 3, 4, 5, 10, 15, 20]) -> Dict[List[str, float]]:
         """
         (Intended to help calculate sharpness of the position).
@@ -198,12 +229,20 @@ class zPosition:
                 logging.info(f"Saved new engine multidepth evaluation of FEN: {self.fen}. Eval: {self._cached_engine_multidepth_evaluations[this_depth]}")
 
         return {k: self._cached_engine_multidepth_evaluations[k] for k in depths}
+    
+    def stockfish_evaluation(self, engine: chess.engine.SimpleEngine, depth=35, multipv=1):
 
-    def engine_evaluation(self, engine: chess.engine.SimpleEngine, depth=35, multipv=1):
+        # Check the game isn't over already cos engines bug out if so
+        if self.board.outcome() is not None:
+            if self.board.outcome() is None:
+                return 0.5  # Draw
+            return self.board.outcome().winner  # 1 for white and 0 for black
+
         cloud_eval = self.lichess_engine_evaluation
         if cloud_eval is not None:
             if cloud_eval["depth"] >= max(depth, self.engine_evaluation_depth):
                 return chess.engine.Cp(cloud_eval["pvs"][0]["cp"]).wdl().expectation()
+
         if self.engine_evaluation_depth < depth:
             engine_eval = engine.analyse(self.board, chess.engine.Limit(depth=depth), multipv=multipv)
             engine_eval[0]["score"] = engine_eval[0]["score"].white().wdl().expectation()  # Converting to json friendly format
@@ -213,15 +252,53 @@ class zPosition:
                 engine_eval[0]["currmove"] = engine_eval[0]["currmove"].uci()
             self._cached_engine_evaluation = engine_eval
             self.save()
-            this_score = engine_eval[0]["score"]
-            logging.info(f"Saved new engine evaluation of FEN: {self.fen}. Eval: {this_score}")
+            stockfish_eval = engine_eval[0]["score"]
+            logging.info(f"Saved new stockfish evaluation of FEN: {self.fen}. Eval: {stockfish_eval}")
             logging.debug(f"Full evaluation: {self._cached_engine_evaluation}")
-        
+
         return self._cached_engine_evaluation[0]["score"]
+    
+    def leela_evaluation(self, engine: chess.engine.SimpleEngine, nodes=10_000, multipv=1):#
+
+        if self.board.outcome() is not None:
+            if self.board.outcome() is None:
+                return 0.5  # Draw
+            return self.board.outcome().winner  # 1 for white and 0 for black
+
+        if self.leela_evaluation_nodes < nodes:
+            leela_eval = engine.analyse(self.board, chess.engine.Limit(nodes=nodes), multipv=multipv)
+            leela_eval[0]["score"] = leela_eval[0]["score"].white().wdl().expectation()  # Converting to json friendly format
+            if "pv" in leela_eval[0].keys():
+                leela_eval[0]["pv"] = [i.uci() for i in leela_eval[0]["pv"]]  # Converting to json friendly format
+            if "currmove" in leela_eval[0].keys():
+                leela_eval[0]["currmove"] = leela_eval[0]["currmove"].uci()
+            if "nodes" in leela_eval[0].keys():
+                leela_eval[0]["returned_nodes"] = leela_eval[0]["nodes"]
+                leela_eval[0]["nodes"] = nodes  # Not sure why leela often seems to do less than requested but no point requesting the same again
+            self._cached_leela_evaluation = leela_eval
+            self.save()
+            leela_eval = leela_eval[0]["score"]
+            logging.info(f"Saved new leela evaluation of FEN: {self.fen}. Eval: {leela_eval}")
+            logging.debug(f"Full evaluation: {self._cached_leela_evaluation}")
+        
+        return self._cached_leela_evaluation[0]["score"]
+
+    def engine_evaluation(self, engines: Dict[str, chess.engine.SimpleEngine], depth=35, multipv=1, leela_nodes=10_000):
+        
+        if self.board.outcome() is not None:
+            if self.board.outcome() is None:
+                return 0.5  # Draw
+            return self.board.outcome().winner  # 1 for white and 0 for black
+        
+        return (self.stockfish_evaluation(engine=engines["stockfish"], depth=depth, multipv=multipv) + 
+                self.leela_evaluation(engine=engines["leela"], nodes=leela_nodes, multipv=multipv)) / 2
     
     def best_engine_move(self, engine, depth=35) -> str:
         """Returns the UCI move recommended by the engine."""
-        self.engine_evaluation(engine=engine, depth=depth)
+        if self.board.is_game_over():
+            raise ValueError(f"Can't find best move when is_game_over() True for FEN: {self.fen}")
+        
+        self.stockfish_evaluation(engine=engine, depth=depth)
         cloud_eval = self.lichess_engine_evaluation
         if cloud_eval is not None:
             if cloud_eval["depth"] >= max(depth, self.engine_evaluation_depth):
@@ -235,6 +312,7 @@ class zPosition:
             "children": self.children,
             "comment": self.comment,
             "_cached_engine_evaluation": self._cached_engine_evaluation,
+            "_cached_leela_evaluation": self._cached_leela_evaluation,
             "_cached_lichess_stats": self._cached_lichess_stats,
             "_cached_lichess_master_stats": self._cached_lichess_master_stats,
             "_cached_engine_multidepth_evaluations": self._cached_engine_multidepth_evaluations,
@@ -262,6 +340,8 @@ class zPosition:
                 self._cached_engine_multidepth_evaluations = {int(k): v for k, v in x["_cached_engine_multidepth_evaluations"].items()}
         if "_cached_lichess_engine_evaluation" in x.keys():
             self._cached_lichess_engine_evaluation = x["_cached_lichess_engine_evaluation"]
+        if "_cached_leela_evaluation" in x.keys():
+            self._cached_leela_evaluation = x["_cached_leela_evaluation"]
 
     def save(self):
         with open(self.cache_path, "w") as f:
@@ -283,7 +363,7 @@ class zPosition:
         r = requests.get(url)
         time.sleep(0.2)
         if r.status_code == 429:
-            logging.info(f"Hit Lichess API rate limit, not making any more api calls... (And waiting to avoid re-run oopsies)")
+            logging.info(f"Hit Lichess API engine rate limit, not making any more api calls... (And waiting to avoid re-run oopsies)")
             globals.engine_rate_limit = True
             return None
         else:
@@ -332,7 +412,7 @@ class zPosition:
         r = requests.get(url)
         time.sleep(0.2)
         if r.status_code == 429:
-            logging.info(f"Hit Lichess API rate limit, making no more requests and waiting to avoid restart oopsies")
+            logging.info(f"Hit Lichess stats API rate limit, making no more requests and waiting to avoid restart oopsies")
             globals.explorer_limit = True
             return None
         else:
@@ -362,7 +442,7 @@ class zPosition:
             this_position = zPosition(fen=this_fen)
             if game_node.turn() == side:
                 # Use the engine best move
-                logging.info(f"Appending best engine move after FEN: {this_fen} - {this_position.best_engine_move(engine=engine, depth=min_depth)}")
+                logging.info(f"Appending best engine move after FEN: {this_fen} - {game_node.board().san(chess.Move.from_uci(this_position.best_engine_move(engine=engine, depth=min_depth)))}")
                 comment=f"Engine move. EE: {this_position.engine_evaluation(engine=engine, depth=min_depth)}. D: {this_position.engine_evaluation_depth}. N: {this_position.engine_evaluation_nodes}. F: {current_likelihood}."
                 next_node = game_node.add_variation(chess.Move.from_uci(this_position.best_engine_move(engine=engine, depth=min_depth)),
                                                     comment=comment)
@@ -387,6 +467,62 @@ class zPosition:
         iterate_game(game, total_progress=total_progress)
         return game
     
+    def probabilistic_engine_evaluation(self, 
+                                        engines, 
+                                        side=chess.WHITE, 
+                                        min_depth=20, 
+                                        min_likelihood=0.01, 
+                                        starting_likelihood=1, 
+                                        min_games=200, 
+                                        leela_nodes=35,
+                                        effect_cap=0.03):
+        """
+        Expected value of engine evaluation when played against human move probabilities in resulting positions.
+        Any subsequent position at least min_likelihood will be included specifically, less frequent positions will be assumed to have the overall evaluation
+        :param side: Which side to find the optimum moves for. The resulting repertoire will include all common moves from the other side.
+        :param min_depth: The minimum analysis depth for the given engine move.
+        :param min_likelihood: The minimum likelihood of observing a given variation for it to be included. 0.01 means at least once in 100 games according to lichess stats.
+        :param current_likelihood: The current likelihood of observing the variation up until this position. Do not set this manually.
+        """
+
+        game = chess.pgn.Game.from_board(self.board)
+        
+        def iteratable_evaluation(game_node: chess.pgn.GameNode, current_likelihood=1):
+            this_fen = game_node.board().fen()
+            this_position = zPosition(fen=this_fen)
+
+            # logging.info(f"Iterable processing fen: {this_fen}")
+
+            if game_node.turn() == side:
+                # Use the engine best move
+                next_node = game_node.add_variation(chess.Move.from_uci(this_position.best_engine_move(engine=engines["stockfish"], depth=min_depth)))
+                return iteratable_evaluation(next_node, current_likelihood=current_likelihood)
+
+            base_eval = this_position.engine_evaluation(engines=engines, depth=min_depth, leela_nodes=leela_nodes)
+
+            this_position_games = this_position.lichess_game_count + this_position.lichess_master_game_count
+
+            if (this_position_games < min_games) or (this_position.lichess_move_frequencies is None):
+                return base_eval
+
+            subvariations_accounted_for = 0  # frequency allocation so infrequent children can just be guessed
+            expected_eval = 0
+            for move, frequency in this_position.lichess_move_frequencies.items():
+                this_frequency = frequency * current_likelihood
+                if (this_frequency >= min_likelihood) and (this_position_games * frequency >= min_games):
+                    next_node = game_node.add_variation(chess.Move.from_uci(move))
+                    expected_eval += iteratable_evaluation(next_node, current_likelihood=this_frequency) * frequency
+                    subvariations_accounted_for += frequency
+            
+            expected_eval += (1 - subvariations_accounted_for) * base_eval
+
+            expected_eval = max(expected_eval, base_eval - effect_cap)
+            expected_eval = min(expected_eval, base_eval + effect_cap)
+
+            return expected_eval
+
+        return iteratable_evaluation(game, current_likelihood=starting_likelihood)
+    
     @property
     def legal_moves(self) -> chess.LegalMoveGenerator:
         return self.board.legal_moves
@@ -408,7 +544,7 @@ class zPosition:
             
 
     def sharpness(self,
-                  engine=None,
+                  engines=None,
                   heuristic="null_model_loss",
                   min_depth=25):
         """
@@ -439,10 +575,10 @@ class zPosition:
         elif heuristic == "evaluation_depth_analysis":
             depths = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 15]
 
-            evaluations = self.engine_multidepth_evaluations(engine=engine, depths=depths)
+            evaluations = self.engine_multidepth_evaluations(engine=engines["stockfish"], depths=depths)
 
             if self.engine_evaluation_depth > 15:  # Even more accurate 'best' evaluation easily available
-                best_eval = [self.best_engine_move(engine=engine, depth=self.engine_evaluation_depth), self.engine_evaluation(engine=engine, depth=self.engine_evaluation_depth)]
+                best_eval = [self.best_engine_move(engine=engines["stockfish"], depth=self.engine_evaluation_depth), self.engine_evaluation(engines=engines, depth=self.engine_evaluation_depth)]
             else:
                 best_eval = evaluations[max(depths)]
                 del evaluations[max(depths)]
@@ -458,17 +594,20 @@ class zPosition:
             raise ValueError(f"Unknown heuristic {heuristic}")
 
     def create_weighted_average_opening_training(self, 
-                                                 engine, 
+                                                 engines, 
                                                  side=chess.WHITE, 
                                                  min_depth=35, 
+                                                 leela_nodes=35,
                                                  min_likelihood=0.1,
+                                                 min_probabilistic_eval_likelihood=0.1,
                                                  sharpness_baseline=0.033,
-                                                 sharpness_frequency_override=0.7,
+                                                 sharpness_frequency_override=0.99,
                                                  min_games=250,
                                                  engine_node_weight=0.01,
                                                  lichess_game_weight=0,
                                                  lichess_master_game_weight=1,
-                                                 debug_positions=list(),
+                                                 debug_positions=dict(),
+                                                 min_illustrative_depth=5,
                                                  engine_weight_capcollar=((30, (1.0, 1.0)), (100, (0.95, 0.99)), (500, (0.97, 0.99)), (1_000, (0.9, 0.95)), (10_000, (0.8, 0.9)), (100_000, (0.75, 0.8)))):
         """
         Our best move is a weighted average of the engine evaluation and the lichess historic evaluation, depending on how many games & nodes on each side.
@@ -489,29 +628,38 @@ class zPosition:
         game = chess.pgn.Game.from_board(self.board)
         total_progress = 0
         
-        def iterate_game(game_node: chess.pgn.GameNode, total_progress, current_likelihood=1) -> float:
+        def iterate_game(game_node: chess.pgn.GameNode, 
+                         total_progress, 
+                         current_likelihood=1, 
+                         min_depth=15, 
+                         current_depth=1,
+                         current_illustrative_depth=0) -> float:
             """Returns current progress"""
             initial_progress = total_progress
 
             this_fen = game_node.board().fen()
             this_position = zPosition(fen=this_fen)
 
-            if this_fen in debug_positions:
+            if this_fen in debug_positions.keys():
                 print("Debug pos")
-                test_eval = this_position.engine_evaluation(engine=engine, depth=min_depth)
+                test_eval = this_position.engine_evaluation(engines=engines, depth=min_depth, leela_nodes=leela_nodes)
 
             if game_node.turn() == side:
                 # Loop through each possible move and evaluate it with engine & lichess stats
                 # Note: pv never really needs to be >1 with this system, just evaluate on each child node instead
                 best_move_so_far = None
                 best_move_evaluation = None
-                if this_position.lichess_master_game_count <= 30:
+                if (this_position.lichess_master_game_count * lichess_master_game_weight) + (this_position.lichess_game_count * lichess_game_weight) <= 30:
                     # Just do the engine move, we don't trust the human statistics at all
-                    logging.info(f"Appending best engine move after FEN: {this_fen} - {this_position.best_engine_move(engine=engine, depth=min_depth)}")
-                    comment=f"Engine move. EE: {this_position.engine_evaluation(engine=engine, depth=min_depth):.3f}. D: {this_position.engine_evaluation_depth}. N: {this_position.engine_evaluation_nodes}. F: {current_likelihood:.4f}."
-                    next_node = game_node.add_variation(chess.Move.from_uci(this_position.best_engine_move(engine=engine, depth=min_depth)),
+                    logging.info(f"Appending best engine move after FEN: {this_fen} - {game_node.board().san(chess.Move.from_uci(this_position.best_engine_move(engine=engines['stockfish'], depth=min_depth)))}")
+                    comment=f"Engine move. EE: {this_position.engine_evaluation(engines=engines, depth=min_depth):.3f}. D: {this_position.engine_evaluation_depth}. N: {this_position.engine_evaluation_nodes}. F: {current_likelihood:.4f}."
+                    next_node = game_node.add_variation(chess.Move.from_uci(this_position.best_engine_move(engine=engines["stockfish"], depth=min_depth)),
                                                         comment=comment)
-                    total_progress = iterate_game(next_node, total_progress=total_progress, current_likelihood=current_likelihood)
+                    total_progress = iterate_game(next_node, 
+                                                  total_progress=total_progress, 
+                                                  current_likelihood=current_likelihood, 
+                                                  current_depth=current_depth+1,
+                                                  current_illustrative_depth=current_illustrative_depth)
                 else:
                     # Have to evaluate all positions properly and then adjust each evaluation to a 'loss from best' basis
                     candidates_moves = game_node.board().legal_moves
@@ -519,7 +667,8 @@ class zPosition:
                     candidates_positions = {move: this_position.position_from_move(candidates_moves_uci[move]) for move in candidates_moves}
                     
                     if engine_node_weight != 0:
-                        candidates_engine_evaluations = {move: candidates_positions[move].engine_evaluation(engine=engine, depth=min_depth) for move in candidates_moves}  # Could be min_depth -1 but this will probably save processing in long run
+                        candidates_engine_evaluations = {move: candidates_positions[move].engine_evaluation(engines=engines, depth=min_depth, leela_nodes=leela_nodes) for move in candidates_moves}  # Could be min_depth -1 but this will probably save processing in long run
+                        candidates_probabilistic_evals = {move: candidates_positions[move].probabilistic_engine_evaluation(engines=engines, side=side, min_likelihood=min_probabilistic_eval_likelihood, starting_likelihood=current_likelihood, leela_nodes=leela_nodes, min_depth=min_depth) for move in candidates_moves}
                         candidates_gross_engine_weights = {move: candidates_positions[move].engine_evaluation_nodes * engine_node_weight for move in candidates_moves}
                         
                         # The engine evaluation delta is measured against the top move, the others against the weighted average. This is to try to avoid outliers in the other two. Min depth guards against engine outliers.
@@ -529,10 +678,12 @@ class zPosition:
                         else:
                             engine_evaluation_best = min(candidates_engine_evaluations.values())
                         candidates_engine_evaluations_delta = {move: candidates_engine_evaluations[move] - engine_evaluation_best for move in candidates_moves}
+                        candidates_engine_evaluations_probabilistic_delta = {move: candidates_probabilistic_evals[move] - engine_evaluation_best for move in candidates_moves}
                         # candidates_engine_evaluations_delta = {move: candidates_engine_evaluations[move] - engine_evaluation_weighted_average for move in candidates_moves}
                     else:
                         candidates_engine_evaluations = {move: 0 for move in candidates_moves}
                         candidates_engine_evaluations_delta = {move: 0 for move in candidates_moves}
+                        candidates_engine_evaluations_probabilistic_delta = {move: 0 for move in candidates_moves}
                     
                     if lichess_game_weight != 0:
                         candidates_lichess_evaluations = {move: candidates_positions[move].lichess_white_evaluation_historic for move in candidates_moves}
@@ -591,7 +742,7 @@ class zPosition:
                         this_lichess_weight = candidates_gross_lichess_weights[candidate_move] * non_engine_capcol_multiplier / candidates_gross_total_weights[candidate_move]
                         this_lichess_master_weight = candidates_gross_lichess_master_weights[candidate_move] * non_engine_capcol_multiplier / candidates_gross_total_weights[candidate_move]
 
-                        candidate_weighted_evaluation = (candidates_engine_evaluations_delta[candidate_move] * this_engine_weight) + (candidates_lichess_evaluations_deltas[candidate_move] * this_lichess_weight) + (candidates_lichess_master_evaluations_deltas[candidate_move] * this_lichess_master_weight)
+                        candidate_weighted_evaluation = (candidates_engine_evaluations_probabilistic_delta[candidate_move] * this_engine_weight) + (candidates_lichess_evaluations_deltas[candidate_move] * this_lichess_weight) + (candidates_lichess_master_evaluations_deltas[candidate_move] * this_lichess_master_weight)
                         candidates_final_evaluations[candidate_move] = candidate_weighted_evaluation
                         candidates_initial_weights[candidate_move] = f"(Engine {pre_capcol_engine_weight:.2f})(Lichess {candidates_gross_lichess_weights[candidate_move] / candidates_gross_total_weights[candidate_move]:.2f})(Master {candidates_gross_lichess_master_weights[candidate_move] / candidates_gross_total_weights[candidate_move]:.2f})"
                         candidates_final_weights[candidate_move] = f"(Engine {this_engine_weight:.2f})(Lichess {this_lichess_weight:.2f})(Master {this_lichess_master_weight:.2f})"
@@ -619,7 +770,7 @@ class zPosition:
                                 best_lichess_master_weight = this_lichess_master_weight
                     
                     if best_move_so_far is not None:
-                        if this_fen in debug_positions:
+                        if this_fen in debug_positions.keys():
                             # Check out:
                             # candidates_engine_evaluations_delta
                             # candidates_lichess_evaluations_deltas
@@ -627,54 +778,74 @@ class zPosition:
                             # candidates_final_evaluations
                             # candidates_final_weights
                             eval_frame = pd.concat([pd.Series(candidates_engine_evaluations_delta, name="engine"), 
+                                                    pd.Series(candidates_engine_evaluations_probabilistic_delta, name="engine_probabilistic"),
                                                     pd.Series(candidates_lichess_evaluations_deltas, name="lichess"), 
                                                     pd.Series(candidates_lichess_master_evaluations_deltas, name="master"), 
                                                     pd.Series(candidates_final_evaluations, name="final"), 
                                                     pd.Series(candidates_gross_all_lichess_weights, name="lichess_total_weight"),
                                                     pd.Series(candidates_initial_weights, name="initial_weights"),
-                                                    pd.Series(candidates_final_weights, name="final_weights")], axis=1)
-                            print("Debug pos")
+                                                    pd.Series(candidates_final_weights, name="final_weights")], axis=1).sort_values(by="final")
+                            print(f"Debug position: {this_fen} ({debug_positions[this_fen]})")
+                            print(eval_frame)
+                            print("...")
                         best_position = this_position.position_from_move(best_move_so_far.uci())
-                        logging.info(f"Appending best weighted move after FEN: {this_fen} - {best_move_so_far.uci()} - Sharpness {this_position.sharpness(engine=engine, min_depth=min_depth, heuristic='evaluation_depth_analysis'):.3f}")
+                        logging.info(f"Appending best weighted move after FEN: {this_fen} - {game_node.board().san(best_move_so_far)} - Sharpness {this_position.sharpness(engines=engines, min_depth=min_depth, heuristic='evaluation_depth_analysis'):.3f}")
                         comment=f"WEDel: {best_move_evaluation*100:.1f}. \n"
-                        comment+=f"EEDel: {candidates_engine_evaluations_delta[best_move_so_far]*100:.1f}. MEDel: {candidates_lichess_master_evaluations_deltas[best_move_so_far]*100:.1f}. LEDel: {candidates_lichess_evaluations_deltas[best_move_so_far]*100:.1f}.\n"
+                        comment+=f"EEDel: {candidates_engine_evaluations_probabilistic_delta[best_move_so_far]*100:.1f}. MEDel: {candidates_lichess_master_evaluations_deltas[best_move_so_far]*100:.1f}. LEDel: {candidates_lichess_evaluations_deltas[best_move_so_far]*100:.1f}.\n"
                         comment+=f"EE: {candidates_engine_evaluations[best_move_so_far]*100:.1f}. ME: {candidates_lichess_master_evaluations[best_move_so_far]*100:.1f}. LE: {candidates_lichess_evaluations[best_move_so_far]*100:.1f}.\n"
-                        comment+=f"MG: {best_position.lichess_master_game_count}. LG: {best_position.lichess_game_count}. EW: {best_engine_weight:.2f}. F%: {current_likelihood*100:.2f}. D: {best_position.engine_evaluation_depth}. Sharp: {this_position.sharpness(engine=engine, min_depth=min_depth, heuristic='evaluation_depth_analysis'):.3f}"
+                        comment+=f"MG: {best_position.lichess_master_game_count}. LG: {best_position.lichess_game_count}. EW: {best_engine_weight:.2f}. F%: {current_likelihood*100:.2f}. D: {best_position.engine_evaluation_depth}. Sharp: {this_position.sharpness(engines=engines, min_depth=min_depth, heuristic='evaluation_depth_analysis'):.3f}"
                         next_node = game_node.add_variation(best_move_so_far,
                                                             comment=comment)
-                        total_progress = iterate_game(next_node, total_progress=total_progress, current_likelihood=current_likelihood)
+                        total_progress = iterate_game(next_node, 
+                                                      total_progress=total_progress, 
+                                                      current_likelihood=current_likelihood, 
+                                                      current_depth=current_depth+1,
+                                                      current_illustrative_depth=current_illustrative_depth)
             else:
                 # Figure out which enemy moves are worth including in training data
                 # Typically because their frequency * sharpness is high enough
-                if this_position.lichess_game_count < min_games:
-                    total_progress += current_likelihood
-                    logging.info(f"No longer exploring after FEN: {this_fen} as only {this_position.lichess_game_count} games (< min_games of {min_games})")
-                    return total_progress
-
                 has_subvariations = False
-                for move, frequency in this_position.lichess_move_frequencies.items():
-                    total_frequency = frequency * current_likelihood
-                    next_position = this_position.position_from_move(move)
-                    next_sharpness = next_position.sharpness(engine=engine, heuristic="evaluation_depth_analysis")
-                    total_priority = frequency * current_likelihood * max(1, next_sharpness / sharpness_baseline)
-                    
-                    frequent_enough = total_priority >= min_likelihood
-                    if frequent_enough:
-                        logging.info(f"Appending common enough response ({total_frequency*100:.2f}%) after FEN: {this_fen} - {move} - Sharpness: {next_sharpness} - Priority: {total_priority:.2f}")
-                        comment = "Common response. "
-                    else:
-                        frequent_enough = frequent_enough or (next_sharpness >= sharpness_frequency_override)
+                if (this_position.lichess_game_count + this_position.lichess_master_game_count >= min_games) and (current_likelihood != 0) and (this_position.lichess_move_frequencies is not None):
+                    for move, frequency in this_position.lichess_move_frequencies.items():
+                        total_frequency = frequency * current_likelihood
+                        next_position = this_position.position_from_move(move)
+                        next_sharpness = next_position.sharpness(engines=engines, heuristic="evaluation_depth_analysis")
+                        total_priority = frequency * current_likelihood * max(1, next_sharpness / sharpness_baseline)
+                        
+                        frequent_enough = total_priority >= min_likelihood
                         if frequent_enough:
-                            logging.info(f"Appending sharp line response due to override ({next_sharpness:.2f}S) after FEN: {this_fen} - {move} - Sharpness: {next_sharpness} - Priority: {total_priority:.2f}")
-                            comment = "Sharp line. "
+                            logging.info(f"Appending common enough response ({total_frequency*100:.2f}%) after FEN: {this_fen} - {game_node.board().san(chess.Move.from_uci(move))} - Sharpness: {next_sharpness} - Priority: {total_priority:.2f}")
+                            comment = "Common response. "
+                        else:
+                            frequent_enough = frequent_enough or (next_sharpness >= sharpness_frequency_override)
+                            if frequent_enough:
+                                logging.info(f"Appending sharp line response due to override ({next_sharpness:.2f}S) after FEN: {this_fen} - {game_node.board().san(chess.Move.from_uci(move))} - Sharpness: {next_sharpness} - Priority: {total_priority:.2f}")
+                                comment = "Sharp line. "
 
-                    if frequent_enough:
-                        has_subvariations = True
-                        comment = comment + f"LE: {next_position.lichess_white_evaluation_historic*100:.1f}. LM: {next_position.lichess_master_white_evaluation_historic*100:.1f}. LN: {next_position.lichess_game_count}. F%: {total_frequency*100:.2f}."
-                        next_node = game_node.add_variation(chess.Move.from_uci(move), comment=comment)
-                        total_progress = iterate_game(next_node, total_progress=total_progress, current_likelihood=total_frequency)
+                        if frequent_enough:
+                            has_subvariations = True
+                            comment = comment + f"LE: {next_position.lichess_white_evaluation_historic*100:.1f}. LM: {next_position.lichess_master_white_evaluation_historic*100:.1f}. LN: {next_position.lichess_game_count}. F%: {total_frequency*100:.2f}."
+                            next_node = game_node.add_variation(chess.Move.from_uci(move), comment=comment)
+                            total_progress = iterate_game(next_node, 
+                                                          total_progress=total_progress, 
+                                                          current_likelihood=total_frequency, 
+                                                          current_depth=current_depth+1,
+                                                          current_illustrative_depth=0)
+
                 if not has_subvariations:
                     total_progress += current_likelihood
+
+                    # Add illustrative moves at the end! At the moment just one in each position
+                    if current_illustrative_depth < min_illustrative_depth:
+                        logging.info(f"Appending illustrative engine move after FEN: {this_fen} - {game_node.board().san(chess.Move.from_uci(this_position.best_engine_move(engine=engines['stockfish'], depth=min_depth)))}")
+                        comment=f"Illustrative engine move. EE: {this_position.engine_evaluation(engines=engines, depth=min_depth):.3f}. D: {this_position.engine_evaluation_depth}. N: {this_position.engine_evaluation_nodes}. F: {current_likelihood:.4f}."
+                        next_node = game_node.add_variation(chess.Move.from_uci(this_position.best_engine_move(engine=engines["stockfish"], depth=min_depth)),
+                                                            comment=comment)
+                        total_progress = iterate_game(next_node, 
+                                                      total_progress=total_progress, 
+                                                      current_likelihood=0, 
+                                                      current_depth=current_depth+1,
+                                                      current_illustrative_depth=current_illustrative_depth+1)
                 else:
                     total_progress = initial_progress + current_likelihood
                     logging.info(f"Total progress: {total_progress*100}%")
@@ -701,50 +872,66 @@ class zPosition:
 
 if __name__ == "__main__":
     import psutil
-    engine = chess.engine.SimpleEngine.popen_uci(r"E:\\chess\\stockfish_15_win_x64_popcnt\\stockfish_15_x64_popcnt.exe")
-    leela = chess.engine.SimpleEngine.popen_uci(r"C:\\Users\\LZoe\\Desktop\\Leela\\lc0.exe")
+    engines = {
+        "stockfish": chess.engine.SimpleEngine.popen_uci(r"E:\\chess\\stockfish_15_win_x64_popcnt\\stockfish_15_x64_popcnt.exe"),
+        "leela": chess.engine.SimpleEngine.popen_uci(r"C:\\Users\\LZoe\\Desktop\\Leela\\lc0.exe")
+    }
     threads: int = int(psutil.cpu_count(logical=True) - 3)  # almost all logical CPU cores
-    hash: int = int(psutil.virtual_memory().available / 1024 / 1024 * 0.4)  # 75% of available RAM
-    engine.configure({"Hash": hash})
-    engine.configure({"Threads": threads})
+    hash: int = int(psutil.virtual_memory().available / 1024 / 1024 * 0.3)  # 75% of available RAM
+    engines["stockfish"].configure({"Hash": hash})
+    engines["stockfish"].configure({"Threads": threads})
 
     a = zPosition()
  
     # Depth of 21 can hit lichess rate limit, 22 seems like the best 'quick' number
     # Big time increase after 40
     # 35 seems doable for smaller repertoires
-    MIN_DEPTH = 20
-    MIN_LIKELIHOOD = 0.01
+    MIN_DEPTH = 20 
+    LEELA_NODES = 2_500
+    MIN_LIKELIHOOD = 0.001
+    MIN_PROBABILISTIC_EVALUATION_LIKELIHOOD = 0.001
     OUT_POSTFIX = "_repertoire"
+    MIN_ILLUSTRATIVE_DEPTH = 0
 
     # For weighted average repertoire
+    STOCKFISH_LEELA_WEIGHT=0.5
     ENGINE_NODE_WEIGHT=0.000002
     LICHESS_GAME_WEIGHT=0.0005
     MASTER_GAME_WEIGHT=1
-    DEBUG_POSITIONS = ["rnbqkbnr/pp2pppp/8/2Pp4/3p4/5N2/PP2PPPP/RNBQKB1R b KQkq - 0 4"]
+    DEBUG_POSITIONS = {"rnbqkbnr/pp1ppppp/8/2p5/4P3/5N2/PPPP1PPP/RNBQKB1R b KQkq - 1 2": "Sicilian",
+                       "rnbqkbnr/pp1p1ppp/4p3/8/3NP3/8/PPP2PPP/RNBQKB1R b KQkq - 0 4": "French Sicilian",
+                       "rnbqkb1r/pp2pppp/3p1n2/8/3NP3/2N5/PPP2PPP/R1BQKB1R b KQkq - 2 5": "Open Sicilian decision point",  # 
+                       "rnbqkbnr/1p1p1ppp/p3p3/8/3NP3/2N5/PPP2PPP/R1BQKB1R b KQkq - 1 5": "Kan Sicilian",  # 
+    }
     ENGINE_WEIGHT_CAPCOLLAR=((300, (1.0, 0.99)), (1_000, (0.98, 0.99)), (5_000, (0.97, 0.99)), (10_000, (0.95, 0.98)), (100_000, (0.5, 0.65)), (500_000, (0.4, 0.41)))
 
-    black_repertoire = a.create_weighted_average_opening_training(engine=engine, 
+    black_repertoire = a.create_weighted_average_opening_training(engines=engines, 
                                                                   side=chess.BLACK, 
                                                                   min_depth=MIN_DEPTH, 
+                                                                  leela_nodes=LEELA_NODES,
                                                                   min_likelihood=MIN_LIKELIHOOD,
+                                                                  min_probabilistic_eval_likelihood=MIN_PROBABILISTIC_EVALUATION_LIKELIHOOD,
                                                                   engine_node_weight=ENGINE_NODE_WEIGHT,
                                                                   lichess_game_weight=LICHESS_GAME_WEIGHT,
                                                                   lichess_master_game_weight=MASTER_GAME_WEIGHT,
                                                                   debug_positions=DEBUG_POSITIONS,
-                                                                  engine_weight_capcollar=ENGINE_WEIGHT_CAPCOLLAR)
+                                                                  engine_weight_capcollar=ENGINE_WEIGHT_CAPCOLLAR,
+                                                                  min_illustrative_depth=MIN_ILLUSTRATIVE_DEPTH)
     print("Black repertoire:")
     print(black_repertoire)
     print(black_repertoire, file=open(f"black{OUT_POSTFIX}.pgn", "w"), end="\n\n")
 
-    white_repertoire = a.create_weighted_average_opening_training(engine=engine, 
+    white_repertoire = a.create_weighted_average_opening_training(engines=engines, 
                                                                   min_depth=MIN_DEPTH, 
+                                                                  leela_nodes=LEELA_NODES,
                                                                   min_likelihood=MIN_LIKELIHOOD,
+                                                                  min_probabilistic_eval_likelihood=MIN_PROBABILISTIC_EVALUATION_LIKELIHOOD,
                                                                   engine_node_weight=ENGINE_NODE_WEIGHT,
                                                                   lichess_game_weight=LICHESS_GAME_WEIGHT,
                                                                   lichess_master_game_weight=MASTER_GAME_WEIGHT,
                                                                   debug_positions=DEBUG_POSITIONS,
-                                                                  engine_weight_capcollar=ENGINE_WEIGHT_CAPCOLLAR)
+                                                                  engine_weight_capcollar=ENGINE_WEIGHT_CAPCOLLAR,
+                                                                  min_illustrative_depth=MIN_ILLUSTRATIVE_DEPTH)
     print("White repertoire:")
     print(white_repertoire)
     print(white_repertoire, file=open(f"white{OUT_POSTFIX}.pgn", "w"), end="\n\n")
