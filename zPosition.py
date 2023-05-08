@@ -293,7 +293,7 @@ class zPosition:
         return (self.stockfish_evaluation(engine=engines["stockfish"], depth=depth, multipv=multipv) + 
                 self.leela_evaluation(engine=engines["leela"], nodes=leela_nodes, multipv=multipv)) / 2
     
-    def best_engine_move(self, engine, depth=35) -> str:
+    def best_engine_move(self, engine, depth=35) -> chess.Move:
         """Returns the UCI move recommended by the engine."""
         if self.board.is_game_over():
             raise ValueError(f"Can't find best move when is_game_over() True for FEN: {self.fen}")
@@ -302,8 +302,8 @@ class zPosition:
         cloud_eval = self.lichess_engine_evaluation
         if cloud_eval is not None:
             if cloud_eval["depth"] >= max(depth, self.engine_evaluation_depth):
-                return cloud_eval["pvs"][0]["moves"].split(" ")[0]
-        return self._cached_engine_evaluation[0]["pv"][0]
+                return chess.Move.from_uci(cloud_eval["pvs"][0]["moves"].split(" ")[0])
+        return chess.Move.from_uci(self._cached_engine_evaluation[0]["pv"][0])
 
     def to_dict(self):
         return {
@@ -442,9 +442,9 @@ class zPosition:
             this_position = zPosition(fen=this_fen)
             if game_node.turn() == side:
                 # Use the engine best move
-                logging.info(f"Appending best engine move after FEN: {this_fen} - {game_node.board().san(chess.Move.from_uci(this_position.best_engine_move(engine=engine, depth=min_depth)))}")
+                logging.info(f"Appending best engine move after FEN: {this_fen} - {game_node.board().san(this_position.best_engine_move(engine=engine, depth=min_depth))}")
                 comment=f"Engine move. EE: {this_position.engine_evaluation(engine=engine, depth=min_depth)}. D: {this_position.engine_evaluation_depth}. N: {this_position.engine_evaluation_nodes}. F: {current_likelihood}."
-                next_node = game_node.add_variation(chess.Move.from_uci(this_position.best_engine_move(engine=engine, depth=min_depth)),
+                next_node = game_node.add_variation(this_position.best_engine_move(engine=engine, depth=min_depth),
                                                     comment=comment)
                 total_progress = iterate_game(next_node, total_progress=total_progress, current_likelihood=current_likelihood)
             else:
@@ -495,7 +495,7 @@ class zPosition:
 
             if game_node.turn() == side:
                 # Use the engine best move
-                next_node = game_node.add_variation(chess.Move.from_uci(this_position.best_engine_move(engine=engines["stockfish"], depth=min_depth)))
+                next_node = game_node.add_variation(this_position.best_engine_move(engine=engines["stockfish"], depth=min_depth))
                 return iteratable_evaluation(next_node, current_likelihood=current_likelihood)
 
             base_eval = this_position.engine_evaluation(engines=engines, depth=min_depth, leela_nodes=leela_nodes)
@@ -651,9 +651,9 @@ class zPosition:
                 best_move_evaluation = None
                 if (this_position.lichess_master_game_count * lichess_master_game_weight) + (this_position.lichess_game_count * lichess_game_weight) <= 30:
                     # Just do the engine move, we don't trust the human statistics at all
-                    logging.info(f"Appending best engine move after FEN: {this_fen} - {game_node.board().san(chess.Move.from_uci(this_position.best_engine_move(engine=engines['stockfish'], depth=min_depth)))}")
+                    logging.info(f"Appending best engine move after FEN: {this_fen} - {game_node.board().san(this_position.best_engine_move(engine=engines['stockfish'], depth=min_depth))}")
                     comment=f"Engine move. EE: {this_position.engine_evaluation(engines=engines, depth=min_depth):.3f}. D: {this_position.engine_evaluation_depth}. N: {this_position.engine_evaluation_nodes}. F: {current_likelihood:.4f}."
-                    next_node = game_node.add_variation(chess.Move.from_uci(this_position.best_engine_move(engine=engines["stockfish"], depth=min_depth)),
+                    next_node = game_node.add_variation(this_position.best_engine_move(engine=engines["stockfish"], depth=min_depth),
                                                         comment=comment)
                     total_progress = iterate_game(next_node, 
                                                   total_progress=total_progress, 
@@ -837,9 +837,9 @@ class zPosition:
 
                     # Add illustrative moves at the end! At the moment just one in each position
                     if current_illustrative_depth < min_illustrative_depth:
-                        logging.info(f"Appending illustrative engine move after FEN: {this_fen} - {game_node.board().san(chess.Move.from_uci(this_position.best_engine_move(engine=engines['stockfish'], depth=min_depth)))}")
+                        logging.info(f"Appending illustrative engine move after FEN: {this_fen} - {game_node.board().san(this_position.best_engine_move(engine=engines['stockfish'], depth=min_depth))}")
                         comment=f"Illustrative engine move. EE: {this_position.engine_evaluation(engines=engines, depth=min_depth):.3f}. D: {this_position.engine_evaluation_depth}. N: {this_position.engine_evaluation_nodes}. F: {current_likelihood:.4f}."
-                        next_node = game_node.add_variation(chess.Move.from_uci(this_position.best_engine_move(engine=engines["stockfish"], depth=min_depth)),
+                        next_node = game_node.add_variation(this_position.best_engine_move(engine=engines["stockfish"], depth=min_depth),
                                                             comment=comment)
                         total_progress = iterate_game(next_node, 
                                                       total_progress=total_progress, 
