@@ -67,8 +67,8 @@ MAX_DEPTH = 1000
 
 # (1) Mode: Neutral
 menu_def_neutral = [
-        ["File", ["Open .pgn"]],
-        ['&Mode', ['Play']],
+        ["File", ["Open .pgn", "Download .pgn's"]],
+        ['&Mode', ['Play', 'Lessons']],
         ['Boar&d', ['Flip', 'Color', ['Brown::board_color_k',
                                       'Blue::board_color_k',
                                       'Green::board_color_k',
@@ -83,7 +83,6 @@ menu_def_neutral = [
 
 class EasyChessGui:
     queue = queue.Queue()
-    is_user_white = True  # White is at the bottom in board layout
 
     def __init__(self, theme, fen = chess.STARTING_FEN):
         self.database = Database()
@@ -104,11 +103,9 @@ class EasyChessGui:
         self.move_sq_light_color = '#E8E18E'
         self.move_sq_dark_color = '#B8AF4E'
 
-        layout = self.build_main_layout(True)
-        self.window = sg.Window('{} {}'.format(APP_NAME, APP_VERSION),
-                                layout, default_button_element_size=(12, 1),
-                                auto_size_buttons=False,
-                                icon=ico_path[platform]['pecg']).finalize()
+        self.window = None
+        self._mode = None
+        self.mode = "Play"
         
         self.game = chess.pgn.Game()
         self.game_node = self.game
@@ -116,6 +113,16 @@ class EasyChessGui:
         # Tracking any short term variables in between window reads
         self.move_state = 0
         self.move_from = None
+
+    @property
+    def mode(self) -> str:
+        return self._mode
+    
+    @mode.setter
+    def mode(self, value: str):
+        if value != self._mode:
+            self._mode = value
+            self.create_new_window()
 
     @property
     def game(self) -> chess.pgn.Game:
@@ -133,10 +140,10 @@ class EasyChessGui:
     @game_node.setter
     def game_node(self, value: chess.pgn.GameNode):
 
-        self.redraw_board(self.window)
+        self.redraw_board()
         self._game_node = value
         self._psg_board = self.fen_to_psg_board()
-        self.redraw_board(self.window)
+        self.redraw_board()
 
         if isinstance(self._game_node, chess.pgn.ChildNode):
             # Has a parent node and 'move' that we can highlight
@@ -162,26 +169,37 @@ class EasyChessGui:
     @property
     def fen(self) -> str:
         return self.board.fen()
+    
+    def flip_board(self) -> None:
+        """Flips the perspective"""
+        self.human_side = not self.human_side
+        self.create_new_window()
+        self.game_node = self.game_node
 
-    def create_new_window(self, window: sg.Window, flip=False) -> sg.Window:
+    def create_new_window(self) -> sg.Window:
         """ Close the window param just before turning the new window """
 
-        loc = window.CurrentLocation()
-        window.Hide()
-        if flip:
-            self.is_user_white = not self.is_user_white
+        if self.window is not None:
+            loc = self.window.CurrentLocation()
+            self.window.Hide()
+        else:
+            loc = (None, None)
 
-        layout = self.build_main_layout(self.is_user_white)
+        layout = self.build_main_layout()
 
         w = sg.Window('{} {}'.format(APP_NAME, APP_VERSION),
             layout,
             default_button_element_size=(12, 1),
             auto_size_buttons=False,
-            location=(loc[0], loc[1]),
+            location=loc,
             icon=ico_path[platform]['pecg']).finalize()
 
-        window.Close()
-        return w
+        if self.window is not None:
+            self.window.Close()
+
+        self.window = w
+
+        self.redraw_board()
     
     def file_picker(self, prompt) -> Path:
         event, values = sg.Window('Login Window',
@@ -292,7 +310,7 @@ class EasyChessGui:
         """ Returns col given square s """
         return chess.square_file(s)
 
-    def redraw_board(self, window: sg.Window):
+    def redraw_board(self):
         """
         Redraw board at start and afte a move.
 
@@ -304,7 +322,7 @@ class EasyChessGui:
                 color = self.sq_dark_color if (i + j) % 2 else \
                         self.sq_light_color
                 piece_image = images[self.psg_board[i][j]]
-                elem = window.find_element(key=(i, j))
+                elem = self.window.find_element(key=(i, j))
                 elem.Update(button_color=('white', color),
                             image_filename=piece_image, )
 
@@ -450,12 +468,11 @@ class EasyChessGui:
         self.game_node = self.game_node.add_variation(move=move)
         return None
 
-    def create_board(self, is_user_white=True):
+    def create_board(self):
         """
         Returns board layout based on color of user. If user is white,
         the white pieces will be at the bottom, otherwise at the top.
 
-        :param is_user_white: user has handling the white pieces
         :return: board layout
         """
         file_char_name = 'abcdefgh'
@@ -463,7 +480,7 @@ class EasyChessGui:
 
         board_layout = []
 
-        if is_user_white:
+        if self.human_side == chess.WHITE:
             # Save the board with black at the top        
             start = 0
             end = 8
@@ -485,31 +502,33 @@ class EasyChessGui:
 
         return board_layout
 
-    def build_main_layout(self, is_user_white=True):
+    def build_main_layout(self):
         """
         Creates all elements for the GUI, icluding the board layout.
 
-        :param is_user_white: if user is white, the white pieces are
-        oriented such that the white pieces are at the bottom.
         :return: GUI layout
         """
         sg.ChangeLookAndFeel(self.gui_theme)
         sg.SetOptions(margins=(0, 3), border_width=1)
 
         # Define board
-        board_layout = self.create_board(is_user_white)
+        board_layout = self.create_board()
 
         board_tab = [[sg.Column(board_layout)]]
 
         self.menu_elem = sg.Menu(menu_def_neutral, tearoff=False)
+
+        rhs = [[sg.Button("Engine Move")], 
+               [sg.Button("<-"), sg.Button("->")]]
+        if self.mode == "Lessons":
+            rhs.append([sg.Button("Next Lesson")])
 
         # White board layout, mode: Neutral
         layout = [
                 [self.menu_elem],
                 [sg.Column(board_tab), 
                  sg.VSeparator(), 
-                 sg.Column([[sg.Button("Engine Move")], 
-                            [sg.Button("<-"), sg.Button("->")]])]
+                 sg.Column(rhs)]
         ]
 
         return layout
@@ -551,6 +570,9 @@ class EasyChessGui:
                     self.game = chess.pgn.read_game(f)
                 continue
 
+            if button == "Download .pgn's":
+                self.database.download_latest_games()
+
             if button == "->":
                 next_node = self.game_node.next()
                 if next_node is not None:
@@ -572,7 +594,7 @@ class EasyChessGui:
 
             # Mode: Neutral
             if button == 'Flip':
-                window = self.create_new_window(window, True)
+                self.flip_board()
                 continue
 
 
@@ -581,8 +603,8 @@ def main():
 
     import psutil
     engines = {
-        "stockfish": chess.engine.SimpleEngine.popen_uci(r"E:\\chess\\stockfish_15_win_x64_popcnt\\stockfish_15_x64_popcnt.exe"),
-        "leela": chess.engine.SimpleEngine.popen_uci(r"C:\\Users\\LZoe\\Desktop\\Leela\\lc0.exe")
+        "stockfish": chess.engine.SimpleEngine.popen_uci(r"C:\\Users\\zoepe\\PycharmProjects\\chess_analysis\\engines\\stockfish_15.1_win_x64_avx2\\stockfish-windows-2022-x86-64-avx2.exe"),
+        "leela": chess.engine.SimpleEngine.popen_uci(r"C:\\Users\\zoepe\\PycharmProjects\\chess_analysis\\engines\\lc0-v0.29.0-windows-gpu-nvidia-cuda\\lc0.exe")
     }
     threads: int = int(psutil.cpu_count(logical=True) - 3)  # almost all logical CPU cores
     hash: int = int(psutil.virtual_memory().available / 1024 / 1024 * 0.3)  # 75% of available RAM
