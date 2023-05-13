@@ -50,6 +50,7 @@ from utils.constants import *
 from zPosition import zPosition
 from pathlib import Path
 from typing import Dict
+from utils.database import Database
 
 logging.basicConfig(level=logging.INFO)
 
@@ -85,6 +86,8 @@ class EasyChessGui:
     is_user_white = True  # White is at the bottom in board layout
 
     def __init__(self, theme, fen = chess.STARTING_FEN):
+        self.database = Database()
+
         self.theme = theme
         self.gui_theme = 'Reddit'
         
