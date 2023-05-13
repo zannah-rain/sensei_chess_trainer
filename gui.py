@@ -67,7 +67,7 @@ MAX_DEPTH = 1000
 
 # (1) Mode: Neutral
 menu_def_neutral = [
-        ["File", ["Open .pgn", "Download .pgn's"]],
+        ["File", ["Open .pgn", "Download .pgn's", "Build puzzles"]],
         ['&Mode', ['Play', 'Lessons']],
         ['Boar&d', ['Flip', 'Color', ['Brown::board_color_k',
                                       'Blue::board_color_k',
@@ -572,6 +572,9 @@ class EasyChessGui:
 
             if button == "Download .pgn's":
                 self.database.download_latest_games()
+
+            if button == "Build puzzles":
+                self.database.full_stockfish_evaluation(engine=engines["stockfish"])
 
             if button == "->":
                 next_node = self.game_node.next()
