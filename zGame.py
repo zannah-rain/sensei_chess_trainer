@@ -8,6 +8,7 @@ import chess.pgn
 from chess import WHITE, BLACK
 import ipywidgets as widgets
 from IPython.display import display
+from globals import username
 
 
 class zGame:
@@ -136,7 +137,7 @@ class zGame:
 
         forwards_button.on_click(click_forwards)
 
-    def player_centipawn_loss(self, depth=chess.engine.Limit(time=0.1), player: str = "ZannahRain"):
+    def player_centipawn_loss(self, depth=chess.engine.Limit(time=0.1), player: str = username):
         scores = self.eval(depth=depth)
         if self.game.headers["White"] == player:
             scores = [i.white().score(mate_score=100) for i in scores]  # Scores from white's perspective
@@ -153,7 +154,7 @@ class zGame:
         scores = scores[first_player_move::2]
         return scores
 
-    def player_evaluation_loss(self, depth=chess.engine.Limit(time=0.1), player: str = "ZannahRain"):
+    def player_evaluation_loss(self, depth=chess.engine.Limit(time=0.1), player: str = username):
         scores = self.eval(depth=depth)
         scores = [i.white() for i in scores]
         scores = [i.wdl().expectation() for i in scores]

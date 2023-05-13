@@ -11,6 +11,7 @@ import time
 from datetime import datetime
 import pandas as pd
 import globals
+from globals import username
 
 
 logging.basicConfig(level=logging.INFO)
@@ -1011,9 +1012,9 @@ class zPosition:
         game.headers["Event"] = f"create_weighted_average_opening_training"
         game.headers["Date"] = datetime.now().__str__()
         if side == chess.WHITE:
-            game.headers["White"] = "ZannahRain"
+            game.headers["White"] = username
         else:
-            game.headers["Black"] = "ZannahRain"
+            game.headers["Black"] = username
 
         game.headers["min_depth"] = str(min_depth)
         game.headers["min_likelihood"] = str(min_likelihood)
