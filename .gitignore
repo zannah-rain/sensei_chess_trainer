@@ -5,3 +5,6 @@
 /__pycache__
 /position_cache
 /my_pgns
+engines/
+utils/__pycache__/
+chess_database.db
