@@ -20,13 +20,36 @@ from zPosition import zPosition
 logging.basicConfig(level=logging.INFO)
 
 
-def fen_to_position(fen: str):
+def fen_to_position(fen: str) -> str:
     """
     Strips out bits of the FEN that aren't usually relevant for analysis.
     
     - IE no full / halfmove count
     """
     return " ".join(fen.split(" ")[:-2])
+
+
+def position_to_fen(position: str) -> str:
+    return f"{position} 0 0"
+
+
+def stockfish_evaluation(board: chess.Board, engine: chess.engine.SimpleEngine, depth=10, multipv=1):
+
+        # Check the game isn't over already cos engines bug out if so
+        if board.outcome() is not None:
+            if board.outcome().winner is None:
+                return 0.5  # Draw
+            return board.outcome().winner  # 1 for white and 0 for black
+
+        engine_eval = engine.analyse(board, chess.engine.Limit(depth=depth), multipv=multipv)
+        engine_eval[0]["score"] = engine_eval[0]["score"].white().wdl().expectation()  # Converting to json friendly format
+        if "pv" in engine_eval[0].keys():
+            # engine_eval[0]["pv"] = [i.uci() for i in engine_eval[0]["pv"]]  # Converting to json friendly format
+            engine_eval[0]["pv"][0] = board.san(engine_eval[0]["pv"][0])
+        if "currmove" in engine_eval[0].keys():
+            engine_eval[0]["currmove"] = engine_eval[0]["currmove"].uci()
+
+        return (engine_eval[0]["score"], engine_eval[0]["pv"][0])
 
 
 class Database:
@@ -74,6 +97,7 @@ class Database:
             position TEXT NOT NULL,
             depth INTEGER NOT NULL,
             evaluation REAL NOT NULL,
+            best_move TEXT NOT NULL,
             PRIMARY KEY (position, depth)
         )""")
 
@@ -128,6 +152,26 @@ class Database:
             query_timestamp TIMESTAMP NOT NULL DEFAULT NOW,
             PRIMARY KEY (fen, source, band)
         )""")
+
+    def all_positions(self):
+
+        position_saved_places = {
+            "positions": ["position"],
+            "combined_evaluations": ["position"],
+            "stockfish_evaluations": ["position"],
+            "leela_evaluations": ["position"],
+            "positions_seen_in_games": ["position"],
+            "move_attempts": ["position", "resulting_position"],
+            "fens": ["position"]
+        }
+
+        x = set()
+        for table, columns in position_saved_places.items():
+            for column in columns:
+                new = [i[0] for i in self.con.execute(f"SELECT {column} FROM {table}").fetchall()]
+                x |= set(new)
+        
+        return x
 
     @property
     def latest_game_timestamp(self):
@@ -189,6 +233,29 @@ class Database:
                             timestamp,
                             int(board.turn)
                          ))
+    
+    def full_stockfish_evaluation(self, engine, min_depth: int = 10):
+        """Ensure full coverage in cached stockfish evaluations at the wanted depth/s"""
+        positions_to_evaluate = self.all_positions() - set([i[0] for i in self.con.execute(f"SELECT position FROM stockfish_evaluations WHERE depth >= {min_depth}").fetchall()])
+        for n, i in enumerate(positions_to_evaluate):
+            fen = f"{i} 0 0"
+            board = chess.Board(fen=fen)
+            if board.is_game_over() or (not board.is_valid()):
+                continue
+            eval = stockfish_evaluation(board=board, engine=engine, depth=min_depth)
+            logging.info(f"Stockfish evaluation done! {n} / {len(positions_to_evaluate)}")
+            self.con.execute(f"""INSERT INTO stockfish_evaluations (position,depth,evaluation,best_move) VALUES(?,?,?,?)""",
+                             (
+                                i,
+                                min_depth,
+                                eval[0],
+                                eval[1]
+                             ))
+            if n % 100 == 0:
+                self.con.commit()
+        
+        self.con.commit()
+
 
     def log_human_move(self, board: chess.Board, timestamp: datetime.datetime, player: str, move: chess.Move, is_real: bool, time_control: str):
         """Should be called ONCE for each attempted human move for each position, real or practice game, user or opponent."""
@@ -298,3 +365,5 @@ class Database:
         
         for i in ["games", "positions", "combined_evaluations", "stockfish_evaluations", "leela_evaluations", "positions_seen_in_games", "move_attempts", "fens", "fen_stats"]:
             print_info(i)
+
+        print(f"{len(self.all_positions())} total positions.")
