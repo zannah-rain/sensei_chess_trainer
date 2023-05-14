@@ -56,6 +56,7 @@ class Database:
     """Wrapper for stuff I want to keep track of that's gotten too complicated to just save in loads of .json files."""
     def __init__(self, file="chess_database.db", rated_only: bool = True):
         self.con = sqlite3.connect(database=file)
+        self.con.row_factory = sqlite3.Row
         self.initialise_database_schema()
 
     def initialise_database_schema(self):
@@ -118,6 +119,20 @@ class Database:
             timestamp TIMESTAMP NOT NULL
         )""")
 
+        self.con.execute(f"""CREATE VIEW IF NOT EXISTS summarised_positions AS
+                             SELECT
+                                position,
+                                white,
+                                black,
+                                whose_turn,
+                                CASE whose_turn
+                                    WHEN TRUE THEN white
+                                    WHEN FALSE THEN black
+                                END player_turn,
+                                COUNT(*) AS frequency
+                             FROM positions_seen_in_games
+                             GROUP BY position, white, black, whose_turn""")
+
         # One to many table tracking which moves have been played in each position
         # Either in an actual game (real_or_practice = "REAL") or not "PRACTICE"
         self.con.execute("""CREATE TABLE IF NOT EXISTS move_attempts (
@@ -129,6 +144,42 @@ class Database:
             real_or_practice TEXT NOT NULL,
             time_control TEXT NOT NULL
         )""")
+
+        self.con.execute(f"""CREATE VIEW IF NOT EXISTS latest_move_attempts AS
+                             SELECT base.*
+                             FROM move_attempts base
+                             INNER JOIN (
+                                 SELECT position, 
+                                        MAX(timestamp) as timestamp
+                                 FROM move_attempts
+                                 WHERE player = '{username}'
+                                 GROUP BY position) latest
+                             ON base.position = latest.position
+                             AND base.timestamp = latest.timestamp
+                             WHERE base.player = '{username}'""")
+
+        self.con.execute(f"""CREATE VIEW IF NOT EXISTS move_attempt_analysis AS 
+                             SELECT 
+                                 latest_move_attempts.*,
+                                 initial_evals.evaluation AS initial_eval,
+                                 resulting_evals.evaluation AS resulting_eval,
+                                 CASE positions.whose_turn
+                                    WHEN TRUE THEN initial_evals.evaluation - resulting_evals.evaluation  -- WHITE
+                                    WHEN FALSE THEN resulting_evals.evaluation - initial_evals.evaluation  -- BLACK
+                                 END evaluation_loss,
+                                 positions.frequency as frequency,
+                                 CASE positions.whose_turn
+                                    WHEN TRUE THEN (initial_evals.evaluation - resulting_evals.evaluation) * positions.frequency  -- WHITE
+                                    WHEN FALSE THEN (resulting_evals.evaluation - initial_evals.evaluation) * positions.frequency  -- BLACK
+                                 END priority
+                             FROM latest_move_attempts
+                             INNER JOIN stockfish_evaluations initial_evals ON latest_move_attempts.position = initial_evals.position
+                             INNER JOIN stockfish_evaluations resulting_evals ON latest_move_attempts.resulting_position = resulting_evals.position
+                             INNER JOIN summarised_positions positions ON latest_move_attempts.position = positions.position
+                             WHERE latest_move_attempts.player = '{username}'
+                                AND positions.player_turn = '{username}'
+                             ORDER BY priority DESC
+                             """)
 
         # Tracking FEN level data
         # Mostly for a one to many table tracking which FEN's have led to any given position
@@ -152,6 +203,9 @@ class Database:
             query_timestamp TIMESTAMP NOT NULL DEFAULT NOW,
             PRIMARY KEY (fen, source, band)
         )""")
+    
+    def highest_priority_puzzle(self) -> str:
+        return self.con.execute("SELECT * FROM move_attempt_analysis LIMIT 1").fetchone()
 
     def all_positions(self):
 
