@@ -20,4 +20,8 @@ def position_to_fen(position: str) -> str:
 
 
 def gamenode_position(game_node: chess.pgn.GameNode) -> str:
-    return fen_to_position(game_node.board().fen())
+    return board_position(game_node.board())
+
+
+def board_position(board: chess.Board) -> str:
+    return fen_to_position(board.fen())
