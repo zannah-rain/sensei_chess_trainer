@@ -51,6 +51,9 @@ from zPosition import zPosition
 from pathlib import Path
 from typing import Dict
 from utils.database import Database, position_to_fen
+import json
+from utils.settings import Settings
+import psutil
 
 logging.basicConfig(level=logging.INFO)
 
@@ -81,11 +84,17 @@ menu_def_neutral = [
         ['&Help', ['About']],
 ]
 
+
 class EasyChessGui:
     queue = queue.Queue()
 
-    def __init__(self, theme, fen = chess.STARTING_FEN):
+    def __init__(self, theme):
         self.database = Database()
+
+        self.settings = Settings(schema={"Stockfish Executable": "Path",
+                                         "Leela Executable": "Path"},
+                                 save_file=Path("EasyChessGuiSettings.json"),
+                                 settings_screen_title="Sensei Settings:")
 
         self.theme = theme
         self.gui_theme = 'Reddit'
@@ -115,6 +124,26 @@ class EasyChessGui:
         self.move_from = None
 
         self.current_puzzle = None
+
+        self._stockfish = None
+        self._leela = None
+
+    def engines(self) -> Dict[str, chess.engine.SimpleEngine]:
+        return {"stockfish": self.stockfish(), "leela": self.leela()}
+    
+    def stockfish(self) -> chess.engine.SimpleEngine:
+        if self._stockfish is None:
+            logging.info("Starting Stockfish")
+            self._stockfish = chess.engine.SimpleEngine.popen_uci(self.settings["Stockfish Executable"])
+            self._stockfish.configure({"Hash": int(psutil.virtual_memory().available / 1024 / 1024 * 0.3)})  # 75% of available ram
+            self._stockfish.configure({"Threads": int(psutil.cpu_count(logical=True) - 3)})
+        
+        return self._stockfish
+
+    def leela(self) -> chess.engine.SimpleEngine:
+        if self._leela is None:
+            logging.info("Starting Leela")
+            self._leela = chess.engine.SimpleEngine.popen_uci(self.settings["Leela Executable"])
 
     @property
     def mode(self) -> str:
@@ -535,7 +564,7 @@ class EasyChessGui:
 
         return layout
 
-    def main_loop(self, engines):
+    def main_loop(self):
         """
         Build GUI, read user and engine config files and take user inputs.
 
@@ -564,7 +593,7 @@ class EasyChessGui:
                 continue
 
             if button == "Engine Move":
-                self.play_move(self.zpos.best_engine_move(engine=engines["stockfish"], depth=20))
+                self.play_move(self.zpos.best_engine_move(engine=self.stockfish(), depth=20))
                 continue
 
             if button == "Open .pgn":
@@ -587,7 +616,7 @@ class EasyChessGui:
                 self.database.download_latest_games()
 
             if button == "Build puzzles":
-                self.database.full_stockfish_evaluation(engine=engines["stockfish"])
+                self.database.full_stockfish_evaluation(engine=self.stockfish())
 
             if button == "->":
                 next_node = self.game_node.next()
@@ -617,19 +646,9 @@ class EasyChessGui:
 def main():
     theme = 'Reddit'
 
-    import psutil
-    engines = {
-        "stockfish": chess.engine.SimpleEngine.popen_uci(r"C:\\Users\\REDACTED_USER\\PycharmProjects\\chess_analysis\\engines\\stockfish_15.1_win_x64_avx2\\stockfish-windows-2022-x86-64-avx2.exe"),
-        "leela": chess.engine.SimpleEngine.popen_uci(r"C:\\Users\\REDACTED_USER\\PycharmProjects\\chess_analysis\\engines\\lc0-v0.29.0-windows-gpu-nvidia-cuda\\lc0.exe")
-    }
-    threads: int = int(psutil.cpu_count(logical=True) - 3)  # almost all logical CPU cores
-    hash: int = int(psutil.virtual_memory().available / 1024 / 1024 * 0.3)  # 75% of available RAM
-    engines["stockfish"].configure({"Hash": hash})
-    engines["stockfish"].configure({"Threads": threads})
-
     pecg = EasyChessGui(theme)
 
-    pecg.main_loop(engines=engines)
+    pecg.main_loop()
 
 
 if __name__ == "__main__":
