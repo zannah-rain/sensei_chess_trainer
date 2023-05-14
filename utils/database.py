@@ -1,5 +1,7 @@
 import sqlite3
 from utils.lichess_api import client as lichess_client
+from utils.puzzle import Puzzle
+from utils.position import *
 from io import StringIO
 import chess.pgn
 import datetime
@@ -18,19 +20,6 @@ from zPosition import zPosition
 # Positions:
 
 logging.basicConfig(level=logging.INFO)
-
-
-def fen_to_position(fen: str) -> str:
-    """
-    Strips out bits of the FEN that aren't usually relevant for analysis.
-    
-    - IE no full / halfmove count
-    """
-    return " ".join(fen.split(" ")[:-2])
-
-
-def position_to_fen(position: str) -> str:
-    return f"{position} 0 0"
 
 
 def stockfish_evaluation(board: chess.Board, engine: chess.engine.SimpleEngine, depth=10, multipv=1):
@@ -71,6 +60,7 @@ class Database:
             time_control TEXT NOT NULL,
             variant TEXT NOT NULL, 
             pgn TEXT NOT NULL,
+            length INTEGER NOT NULL,  -- halfmoves
             PRIMARY KEY (white, black, timestamp)
             )""")
 
@@ -131,6 +121,15 @@ class Database:
                                 COUNT(*) AS frequency
                              FROM positions_seen_in_games
                              GROUP BY position, is_users_turn""")
+        
+        self.con.execute(f"""CREATE TEMP VIEW latest_time_position_seen_in_game AS 
+                             SELECT
+                                position,
+                                whose_turn,
+                                MAX(timestamp) as timestamp
+                             FROM positions_seen_in_games
+                             WHERE is_users_turn = 1
+                             GROUP BY position""")
 
         # One to many table tracking which moves have been played in each position
         # Either in an actual game (real_or_practice = "REAL") or not "PRACTICE"
@@ -143,7 +142,7 @@ class Database:
             player TEXT NOT NULL,
             move TEXT NOT NULL,
             real_or_practice TEXT NOT NULL,
-            time_control TEXT NOT NULL,
+            time_control TEXT,
             PRIMARY KEY (position, timestamp, player)
         )""")
 
@@ -160,9 +159,10 @@ class Database:
                              AND base.timestamp = latest.timestamp
                              WHERE base.player = '{username}'""")
 
-        self.con.execute(f"""CREATE TEMP VIEW move_attempt_analysis AS 
+        self.con.execute(f"""CREATE TEMP VIEW move_attempt_analysis_stage_0 AS 
                              SELECT 
                                  latest_move_attempts.*,
+                                 positions.whose_turn AS whose_turn,
                                  initial_evals.evaluation AS initial_eval,
                                  resulting_evals.evaluation AS resulting_eval,
                                  CASE positions.whose_turn
@@ -170,17 +170,22 @@ class Database:
                                     WHEN FALSE THEN resulting_evals.evaluation - initial_evals.evaluation  -- BLACK
                                  END evaluation_loss,
                                  positions.frequency as frequency,
-                                 CASE positions.whose_turn
-                                    WHEN TRUE THEN (initial_evals.evaluation - resulting_evals.evaluation) * positions.frequency  -- WHITE
-                                    WHEN FALSE THEN (resulting_evals.evaluation - initial_evals.evaluation) * positions.frequency  -- BLACK
-                                 END priority
+                                 last_seen.timestamp as last_seen_in_real_game,
+                                 JULIANDAY("NOW") - JULIANDAY(last_seen.timestamp) as days_since_last_seen
                              FROM latest_move_attempts
                              INNER JOIN stockfish_evaluations initial_evals ON latest_move_attempts.position = initial_evals.position
                              INNER JOIN stockfish_evaluations resulting_evals ON latest_move_attempts.resulting_position = resulting_evals.position
                              INNER JOIN summarised_positions positions ON latest_move_attempts.position = positions.position
+                             INNER JOIN latest_time_position_seen_in_game last_seen ON latest_move_attempts.position = last_seen.position
                              WHERE positions.is_users_turn = 1
-                             ORDER BY priority DESC
                              """)
+        
+        self.con.execute(f"""CREATE TEMP VIEW move_attempt_analysis AS
+                             SELECT
+                                *,
+                                evaluation_loss * frequency / days_since_last_seen AS priority
+                             FROM move_attempt_analysis_stage_0
+                             ORDER BY priority DESC""")
 
         # Tracking FEN level data
         # Mostly for a one to many table tracking which FEN's have led to any given position
@@ -204,9 +209,16 @@ class Database:
             query_timestamp TIMESTAMP NOT NULL DEFAULT NOW,
             PRIMARY KEY (fen, source, band)
         )""")
+
+    def position_last_played(self, position: str):
+        result = self.con.execute(f"SELECT timestamp FROM latest_time_position_seen_in_game WHERE position = '{position}'").fetchone()
+        if result is not None:
+            return dict(result)["timestamp"]
+        else:
+            return None
     
-    def highest_priority_puzzle(self) -> str:
-        return self.con.execute("SELECT * FROM move_attempt_analysis LIMIT 1").fetchone()
+    def highest_priority_puzzle(self) -> Puzzle:
+        return Puzzle(x=dict(self.con.execute("SELECT * FROM move_attempt_analysis LIMIT 1").fetchone()))
 
     def all_positions(self):
 
@@ -232,11 +244,12 @@ class Database:
     def latest_game_timestamp(self):
         if self.latest_game_time is None:
             return None
-        return int(datetime.datetime.strptime(self.latest_game_time, "%Y.%m.%d %H:%M:%S").timestamp() * 1000)
+        return int(datetime.datetime.strptime(self.latest_game_time, "%Y-%m-%d %H:%M:%S").timestamp() * 1000)
     
     @property
     def latest_game_time(self):
         return self.con.execute("SELECT MAX(timestamp) FROM games").fetchone()[0]
+    
     
     def game_search(self,
                     white: str = None,
@@ -277,6 +290,7 @@ class Database:
     def log_played_position(self, board: chess.Board, white: str, black: str, timestamp: datetime.datetime):
         """Should be called ONCE for each observed position in a real game."""
         assert (white == username) or (black == username)
+        assert isinstance(timestamp, datetime.datetime)
 
         position = fen_to_position(board.fen())
 
@@ -285,7 +299,7 @@ class Database:
                             position,
                             white,
                             black,
-                            timestamp,
+                            timestamp.strftime("%Y-%m-%d %H:%M:%S"),
                             int(board.turn)
                          ))
     
@@ -314,6 +328,7 @@ class Database:
 
     def log_human_move(self, board: chess.Board, timestamp: datetime.datetime, player: str, move: chess.Move, is_real: bool, time_control: str):
         """Should be called ONCE for each attempted human move for each position, real or practice game, user or opponent."""
+        assert isinstance(timestamp, datetime.datetime)
 
         position = fen_to_position(board.fen())
         move_string = board.san(move)
@@ -325,7 +340,7 @@ class Database:
         self.con.execute("""INSERT INTO move_attempts (position, timestamp, player, move, resulting_position, real_or_practice, time_control) VALUES(?,?,?,?,?,?,?)""",
                           (
                             position,
-                            timestamp,
+                            timestamp.strftime("%Y-%m-%d %H:%M:%S"),
                             player,
                             move_string,
                             resulting_position,
@@ -355,10 +370,10 @@ class Database:
         Adds a game to the game table.
         Note: Does not commit to allow for faster batching.
         """
-        timestamp = f"{game.headers['UTCDate']} {game.headers['UTCTime']}"
+        timestamp = f"{game.headers['UTCDate']} {game.headers['UTCTime']}".replace(".", "-")
 
         try:
-            self.con.execute("INSERT INTO games (white,black,event,link,timestamp,result,time_control,variant,pgn) VALUES(?,?,?,?,?,?,?,?,?)",
+            self.con.execute("INSERT INTO games (white,black,event,link,timestamp,result,time_control,variant,pgn,length) VALUES(?,?,?,?,?,?,?,?,?,?)",
                              (game.headers["White"],
                               game.headers["Black"],
                               game.headers["Event"],
@@ -367,23 +382,34 @@ class Database:
                               game.headers["Result"],
                               game.headers["TimeControl"],
                               game.headers["Variant"],
-                              game.__str__()))
+                              game.__str__(),
+                              len(list(game.mainline_moves()))))
         except sqlite3.IntegrityError:
             return False
         
+        positions_saved = set()  # Only save each position at most once as repeated positions don't deserve being overweighted that much
         current_game_node = game
         next_game_node = game.next()
+        current_position = gamenode_position(current_game_node)
         while not current_game_node.is_end():
+            if current_position in positions_saved:
+                current_game_node = current_game_node.next()
+                current_position = gamenode_position(current_game_node)
+                next_game_node = current_game_node.next()
+                continue
+
             if current_game_node.turn == chess.WHITE:
                 this_player = game.headers["White"]
             else:
                 this_player = game.headers["Black"]
-
-            self.log_played_position(board=current_game_node.board(), white=game.headers["White"], black=game.headers["Black"], timestamp=timestamp)
-            self.log_human_move(board=current_game_node.board(), timestamp=timestamp, player=this_player, move=next_game_node.move, is_real=True, time_control=game.headers["TimeControl"])
+            timestamp_datetime = datetime.datetime.strptime(timestamp, "%Y-%m-%d %H:%M:%S")
+            self.log_played_position(board=current_game_node.board(), white=game.headers["White"], black=game.headers["Black"], timestamp=timestamp_datetime)
+            self.log_human_move(board=current_game_node.board(), timestamp=timestamp_datetime, player=this_player, move=next_game_node.move, is_real=True, time_control=game.headers["TimeControl"])
             self.log_human_fen(board=current_game_node.board())
+            positions_saved |= {current_position}
 
             current_game_node = current_game_node.next()
+            current_position = gamenode_position(current_game_node)
             next_game_node = current_game_node.next()
         
         logging.info(f"Added game to db: {game.headers['White']} vs {game.headers['Black']} ({game.headers['UTCDate']})")

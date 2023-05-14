@@ -47,6 +47,8 @@ import chess.polyglot
 import logging
 import platform as sys_plat
 from utils.constants import *
+from utils.position import *
+from utils.puzzle import Puzzle
 from zPosition import zPosition
 from pathlib import Path
 from typing import Dict
@@ -54,6 +56,8 @@ from utils.database import Database, position_to_fen
 import json
 from utils.settings import Settings
 import psutil
+from globals import username
+import datetime
 
 logging.basicConfig(level=logging.INFO)
 
@@ -68,10 +72,8 @@ MIN_DEPTH = 1
 MAX_DEPTH = 1000
 
 
-# (1) Mode: Neutral
 menu_def_neutral = [
         ["File", ["Open .pgn", "Download .pgn's", "Build puzzles"]],
-        ['&Mode', ['Play', 'Lessons']],
         ['Boar&d', ['Flip', 'Color', ['Brown::board_color_k',
                                       'Blue::board_color_k',
                                       'Green::board_color_k',
@@ -87,7 +89,7 @@ menu_def_neutral = [
 
 class EasyChessGui:
     queue = queue.Queue()
-
+    
     def __init__(self, theme):
         self.database = Database()
 
@@ -102,7 +104,15 @@ class EasyChessGui:
         self.menu_elem = None
         self.username = 'Acolyte Zoe'
 
-        self.human_side = chess.WHITE
+        # output gui elements
+        self.text_output_board_date_seen = None
+        self.text_output_puzzle_priority = None
+
+        # Puzzle stuff
+        self.current_puzzle: Puzzle = None
+        """"""
+        self.puzzle_attempt = 0
+        """Tracks attempts at the current puzzle, at the moment only the first attempt is recorded."""
 
         # Default board color is brown
         self.sq_light_color = '#F0D9B5'
@@ -113,8 +123,8 @@ class EasyChessGui:
         self.move_sq_dark_color = '#B8AF4E'
 
         self.window = None
-        self._mode = None
-        self.mode = "Play"
+        self._board_perspective = None
+        self.create_new_window()
         
         self.game = chess.pgn.Game()
         self.game_node = self.game
@@ -122,8 +132,6 @@ class EasyChessGui:
         # Tracking any short term variables in between window reads
         self.move_state = 0
         self.move_from = None
-
-        self.current_puzzle = None
 
         self._stockfish = None
         self._leela = None
@@ -146,16 +154,6 @@ class EasyChessGui:
             self._leela = chess.engine.SimpleEngine.popen_uci(self.settings["Leela Executable"])
 
     @property
-    def mode(self) -> str:
-        return self._mode
-    
-    @mode.setter
-    def mode(self, value: str):
-        if value != self._mode:
-            self._mode = value
-            self.create_new_window()
-
-    @property
     def game(self) -> chess.pgn.Game:
         return self._game
     
@@ -170,7 +168,18 @@ class EasyChessGui:
     
     @game_node.setter
     def game_node(self, value: chess.pgn.GameNode):
+        # Update GUI
+        last_seen = self.database.position_last_played(gamenode_position(value))
+        if last_seen is not None:
+            self.text_output_board_date_seen.update(f"Position last played at {last_seen}")
+        else:
+            self.text_output_board_date_seen.update(f"Position not seen in a real game")
+        if self.current_puzzle is not None:
+            self.text_output_puzzle_priority.update(f"Review Priority: {self.current_puzzle.priority}")
+        else:
+            self.text_output_puzzle_priority.update(f"Review Priority: -")
 
+        # Update Board
         self.redraw_board()
         self._game_node = value
         self._psg_board = self.fen_to_psg_board()
@@ -201,11 +210,23 @@ class EasyChessGui:
     def fen(self) -> str:
         return self.board.fen()
     
+    @property
+    def board_perspective(self) -> bool:
+        """chess.WHITE (1) or chess.BLACK (0). Determines the perspective the board is drawn from, independently from whos turn it is."""
+        return self._board_perspective
+    
+    @board_perspective.setter
+    def board_perspective(self, value):
+        if value != self._board_perspective:
+            # Flip da board!
+            self._board_perspective = value
+            self.create_new_window()
+            self.game_node = self.game_node
+
+    
     def flip_board(self) -> None:
         """Flips the perspective"""
-        self.human_side = not self.human_side
-        self.create_new_window()
-        self.game_node = self.game_node
+        self.board_perspective = not self.board_perspective
 
     def create_new_window(self) -> sg.Window:
         """ Close the window param just before turning the new window """
@@ -414,7 +435,6 @@ class EasyChessGui:
     def get_human_move(self, window_read_result):
         button, value = window_read_result
 
-        # Mode: Play, stm: User, user starts moving
         if type(button) is tuple:
             # If fr_sq button is pressed
             if self.move_state == 0:
@@ -467,8 +487,6 @@ class EasyChessGui:
 
                 # Check if user move is legal
                 if user_move in list(self.board.legal_moves):
-                    self.play_move(move=user_move)
-
                     self.move_from = None
                     self.move_state = 0
 
@@ -511,7 +529,7 @@ class EasyChessGui:
 
         board_layout = []
 
-        if self.human_side == chess.WHITE:
+        if self.board_perspective == chess.WHITE:
             # Save the board with black at the top        
             start = 0
             end = 8
@@ -549,17 +567,30 @@ class EasyChessGui:
 
         self.menu_elem = sg.Menu(menu_def_neutral, tearoff=False)
 
-        rhs = [[sg.Button("Engine Move")], 
-               [sg.Button("<-"), sg.Button("->")]]
-        if self.mode == "Lessons":
-            rhs.append([sg.Button("Next Lesson")])
+        # Named elements that might need to be updated on the fly
+        self.text_output_board_date_seen = sg.Text()
+        self.text_output_puzzle_priority = sg.Text()
 
-        # White board layout, mode: Neutral
+
+        main_layout = [[sg.Frame("Position Info", [[self.text_output_board_date_seen]])]]
+        puzzle_layout = [[sg.Frame("Puzzle Info", [[self.text_output_puzzle_priority]])],
+                         [sg.Button("Next Lesson")]]
+
+        # l1 is the layout for tab1
+        # l2 is the layout for tab2
+        tab_main=sg.Tab("Play", main_layout)
+        tab_puzzles=sg.Tab("Puzzles", puzzle_layout)
+        Tg = sg.TabGroup([[tab_main, tab_puzzles]])
+        # This titlegroup object may be further used
+        # in the row of the main layout.
+
         layout = [
                 [self.menu_elem],
                 [sg.Column(board_tab), 
                  sg.VSeparator(), 
-                 sg.Column(rhs)]
+                 sg.Column([[Tg],
+                            [sg.Button("Engine Move")],
+                            [sg.Button("<-"), sg.Button("->")]])]
         ]
 
         return layout
@@ -575,12 +606,10 @@ class EasyChessGui:
 
         board = chess.Board(fen=self.fen)
 
-        # Mode: Neutral, main loop starts here
         while True:
             window_read_result = self.window.Read(timeout=50)
             button, value = window_read_result
 
-            # Mode: Neutral
             if button is None:
                 logging.info('Quit app from main loop, X is pressed.')
                 break
@@ -590,6 +619,15 @@ class EasyChessGui:
                 continue
             if type(window_read_result) == chess.Move:
                 # Apply the move logic
+                if self.current_puzzle is not None:
+                    if self.puzzle_attempt == 0:
+                        # Log the first attempt in the database
+                        self.database.log_human_move(board=self.board, timestamp=datetime.datetime.now(), player=username, move=window_read_result, is_real=False)
+                    self.puzzle_attempt += 1
+                    self.play_move(move=window_read_result)
+                    raise NotImplementedError()
+                else:
+                    self.play_move(move=window_read_result)
                 continue
 
             if button == "Engine Move":
@@ -601,16 +639,11 @@ class EasyChessGui:
                     self.game = chess.pgn.read_game(f)
                 continue
 
-            if button == "Lessons":
-                self.mode = "Lessons"
-                continue
-            if button == "Play":
-                self.mode = "Play"
-                continue
-
             if button == "Next Lesson":
-                self.current_puzzle = dict(self.database.highest_priority_puzzle())
-                self.game = chess.pgn.Game().from_board(chess.Board(fen=position_to_fen(self.current_puzzle["position"])))
+                self.current_puzzle = self.database.highest_priority_puzzle()
+                self.puzzle_attempt = 0
+                self.board_perspective = self.current_puzzle.whose_turn
+                self.game = chess.pgn.Game().from_board(chess.Board(fen=position_to_fen(self.current_puzzle.position)))
 
             if button == "Download .pgn's":
                 self.database.download_latest_games()
@@ -636,8 +669,6 @@ class EasyChessGui:
                     self.game_node = prev_node
                 continue
 
-
-            # Mode: Neutral
             if button == 'Flip':
                 self.flip_board()
                 continue
