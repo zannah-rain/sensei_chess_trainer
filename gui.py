@@ -50,7 +50,7 @@ from utils.constants import *
 from zPosition import zPosition
 from pathlib import Path
 from typing import Dict
-from utils.database import Database
+from utils.database import Database, position_to_fen
 
 logging.basicConfig(level=logging.INFO)
 
@@ -113,6 +113,8 @@ class EasyChessGui:
         # Tracking any short term variables in between window reads
         self.move_state = 0
         self.move_from = None
+
+        self.current_puzzle = None
 
     @property
     def mode(self) -> str:
@@ -569,6 +571,17 @@ class EasyChessGui:
                 with open(self.file_picker(prompt=".pgn file:")[1]["Browse"], "r") as f:
                     self.game = chess.pgn.read_game(f)
                 continue
+
+            if button == "Lessons":
+                self.mode = "Lessons"
+                continue
+            if button == "Play":
+                self.mode = "Play"
+                continue
+
+            if button == "Next Lesson":
+                self.current_puzzle = dict(self.database.highest_priority_puzzle())
+                self.game = chess.pgn.Game().from_board(chess.Board(fen=position_to_fen(self.current_puzzle["position"])))
 
             if button == "Download .pgn's":
                 self.database.download_latest_games()
