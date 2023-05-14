@@ -111,30 +111,31 @@ class Database:
         )""")
 
         # Tracking which positions have been seen when, and who was playing each side
-        self.con.execute("""CREATE TABLE IF NOT EXISTS positions_seen_in_games (
+        self.con.execute(f"""CREATE TABLE IF NOT EXISTS positions_seen_in_games (
             position TEXT NOT NULL,
             whose_turn INTEGER NOT NULL,
             white TEXT NOT NULL,
             black TEXT NOT NULL,
-            timestamp TIMESTAMP NOT NULL
+            timestamp TIMESTAMP NOT NULL,
+            player_turn TEXT GENERATED ALWAYS AS (CASE whose_turn WHEN TRUE THEN white WHEN FALSE THEN black END) STORED,
+            is_users_turn INTEGER GENERATED ALWAYS AS (player_turn == '{username}') STORED
         )""")
 
-        self.con.execute(f"""CREATE VIEW IF NOT EXISTS summarised_positions AS
+        self.con.execute("""CREATE INDEX IF NOT EXISTS ipositions_turn on positions_seen_in_games(position, is_users_turn)""")
+
+        self.con.execute(f"""CREATE TEMP VIEW summarised_positions AS
                              SELECT
                                 position,
-                                white,
-                                black,
                                 whose_turn,
-                                CASE whose_turn
-                                    WHEN TRUE THEN white
-                                    WHEN FALSE THEN black
-                                END player_turn,
+                                is_users_turn,
                                 COUNT(*) AS frequency
                              FROM positions_seen_in_games
-                             GROUP BY position, white, black, whose_turn""")
+                             GROUP BY position, is_users_turn""")
 
         # One to many table tracking which moves have been played in each position
         # Either in an actual game (real_or_practice = "REAL") or not "PRACTICE"
+        # NB that for speed, if the same position is seen more than once in one game the latest move will be recorded once
+        # This also avoids it being overweighted where it probably shouldn't be
         self.con.execute("""CREATE TABLE IF NOT EXISTS move_attempts (
             position TEXT NOT NULL,
             resulting_position TEXT NOT NULL,
@@ -142,10 +143,11 @@ class Database:
             player TEXT NOT NULL,
             move TEXT NOT NULL,
             real_or_practice TEXT NOT NULL,
-            time_control TEXT NOT NULL
+            time_control TEXT NOT NULL,
+            PRIMARY KEY (position, timestamp, player)
         )""")
 
-        self.con.execute(f"""CREATE VIEW IF NOT EXISTS latest_move_attempts AS
+        self.con.execute(f"""CREATE TEMP VIEW latest_move_attempts AS
                              SELECT base.*
                              FROM move_attempts base
                              INNER JOIN (
@@ -158,7 +160,7 @@ class Database:
                              AND base.timestamp = latest.timestamp
                              WHERE base.player = '{username}'""")
 
-        self.con.execute(f"""CREATE VIEW IF NOT EXISTS move_attempt_analysis AS 
+        self.con.execute(f"""CREATE TEMP VIEW move_attempt_analysis AS 
                              SELECT 
                                  latest_move_attempts.*,
                                  initial_evals.evaluation AS initial_eval,
@@ -176,8 +178,7 @@ class Database:
                              INNER JOIN stockfish_evaluations initial_evals ON latest_move_attempts.position = initial_evals.position
                              INNER JOIN stockfish_evaluations resulting_evals ON latest_move_attempts.resulting_position = resulting_evals.position
                              INNER JOIN summarised_positions positions ON latest_move_attempts.position = positions.position
-                             WHERE latest_move_attempts.player = '{username}'
-                                AND positions.player_turn = '{username}'
+                             WHERE positions.is_users_turn = 1
                              ORDER BY priority DESC
                              """)
 
