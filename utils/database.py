@@ -8,6 +8,7 @@ import datetime
 import logging
 from globals import username
 from zPosition import zPosition
+from typing import Tuple
 
 # Tables:
 
@@ -22,23 +23,17 @@ from zPosition import zPosition
 logging.basicConfig(level=logging.INFO)
 
 
-def stockfish_evaluation(board: chess.Board, engine: chess.engine.SimpleEngine, depth=10, multipv=1):
+def engine_evaluation(board: chess.Board, engine: chess.engine.SimpleEngine, limit: chess.engine.Limit, multipv: int=1) -> Tuple[float, chess.Move]:
+    # Check the game isn't over already cos engines bug out if so
+    if board.outcome() is not None:
+        if board.outcome().winner is None:
+            return 0.5  # Draw
+        return board.outcome().winner  # 1 for white and 0 for black
 
-        # Check the game isn't over already cos engines bug out if so
-        if board.outcome() is not None:
-            if board.outcome().winner is None:
-                return 0.5  # Draw
-            return board.outcome().winner  # 1 for white and 0 for black
+    engine_eval = engine.analyse(board, limit, multipv=multipv)
+    engine_eval[0]["score"] = engine_eval[0]["score"].white().wdl().expectation()  # Converting to json friendly format
 
-        engine_eval = engine.analyse(board, chess.engine.Limit(depth=depth), multipv=multipv)
-        engine_eval[0]["score"] = engine_eval[0]["score"].white().wdl().expectation()  # Converting to json friendly format
-        if "pv" in engine_eval[0].keys():
-            # engine_eval[0]["pv"] = [i.uci() for i in engine_eval[0]["pv"]]  # Converting to json friendly format
-            engine_eval[0]["pv"][0] = board.san(engine_eval[0]["pv"][0])
-        if "currmove" in engine_eval[0].keys():
-            engine_eval[0]["currmove"] = engine_eval[0]["currmove"].uci()
-
-        return (engine_eval[0]["score"], engine_eval[0]["pv"][0])
+    return (engine_eval[0]["score"], engine_eval[0]["pv"][0])
 
 
 class Database:
@@ -92,13 +87,47 @@ class Database:
             PRIMARY KEY (position, depth)
         )""")
 
+        self.con.execute(f"""CREATE TEMP VIEW best_stockfish_evaluations AS
+                             SELECT base.*
+                             FROM stockfish_evaluations base
+                             INNER JOIN (
+                                 SELECT position, 
+                                        MAX(depth) as depth
+                                 FROM stockfish_evaluations
+                                 GROUP BY position) deepest
+                             ON base.position = deepest.position
+                             AND base.depth = deepest.depth""")
+
         # Tracking potentially multiple depth leela evaluations by position
         self.con.execute("""CREATE TABLE IF NOT EXISTS leela_evaluations (
             position TEXT NOT NULL,
             nodes INTEGER NOT NULL,
             evaluation REAL NOT NULL,
+            best_move TEXT NOT NULL,
             PRIMARY KEY (position, nodes)
         )""")
+
+        self.con.execute(f"""CREATE TEMP VIEW best_leela_evaluations AS
+                             SELECT base.*
+                             FROM leela_evaluations base
+                             INNER JOIN (
+                                 SELECT position, 
+                                        MAX(nodes) as nodes
+                                 FROM leela_evaluations
+                                 GROUP BY position) deepest
+                             ON base.position = deepest.position
+                             AND base.nodes = deepest.nodes""")
+
+        self.con.execute("""CREATE TEMP VIEW combined_engine_evaluation AS
+                            SELECT stockfish.position,
+                                   stockfish.evaluation,
+                                   stockfish.depth,
+                                   leela.evaluation,
+                                   leela.nodes,
+                                   (stockfish.evaluation + leela.evaluation) / 2 AS evaluation
+                            FROM best_stockfish_evaluations stockfish
+                            INNER JOIN best_leela_evaluations leela
+                            ON stockfish.position = leela.position""")
 
         # Tracking which positions have been seen when, and who was playing each side
         self.con.execute(f"""CREATE TABLE IF NOT EXISTS positions_seen_in_games (
@@ -132,7 +161,7 @@ class Database:
                              GROUP BY position""")
 
         # One to many table tracking which moves have been played in each position
-        # Either in an actual game (real_or_practice = "REAL") or not "PRACTICE"
+        # Either in an actual game (real_or_practice = 1) or not 0
         # NB that for speed, if the same position is seen more than once in one game the latest move will be recorded once
         # This also avoids it being overweighted where it probably shouldn't be
         self.con.execute("""CREATE TABLE IF NOT EXISTS move_attempts (
@@ -141,12 +170,12 @@ class Database:
             timestamp TIMESTAMP NOT NULL,
             player TEXT NOT NULL,
             move TEXT NOT NULL,
-            real_or_practice TEXT NOT NULL,
+            real_or_practice INTEGER NOT NULL,
             time_control TEXT,
             PRIMARY KEY (position, timestamp, player)
         )""")
 
-        self.con.execute(f"""CREATE TEMP VIEW latest_move_attempts AS
+        self.con.execute(f"""CREATE TEMP VIEW latest_real_move_attempts AS
                              SELECT base.*
                              FROM move_attempts base
                              INNER JOIN (
@@ -154,36 +183,62 @@ class Database:
                                         MAX(timestamp) as timestamp
                                  FROM move_attempts
                                  WHERE player = '{username}'
+                                 AND real_or_practice = 1
                                  GROUP BY position) latest
                              ON base.position = latest.position
                              AND base.timestamp = latest.timestamp
-                             WHERE base.player = '{username}'""")
+                             AND base.real_or_practice = 1
+                             AND base.player = '{username}'""")
+        
+        self.con.execute(f"""CREATE TEMP VIEW latest_practice_move_attempts AS
+                             SELECT base.*
+                             FROM move_attempts base
+                             INNER JOIN (
+                                 SELECT position, 
+                                        MAX(timestamp) as timestamp
+                                 FROM move_attempts
+                                 WHERE player = '{username}'
+                                 AND real_or_practice = 0
+                                 GROUP BY position) latest
+                             ON base.position = latest.position
+                             AND base.timestamp = latest.timestamp
+                             AND real_or_practice = 0
+                             AND base.player = '{username}'""")
 
         self.con.execute(f"""CREATE TEMP VIEW move_attempt_analysis_stage_0 AS 
                              SELECT 
-                                 latest_move_attempts.*,
+                                 latest_real_move_attempts.*,
                                  positions.whose_turn AS whose_turn,
                                  initial_evals.evaluation AS initial_eval,
                                  resulting_evals.evaluation AS resulting_eval,
+                                 IFNULL(practice_evals.evaluation, resulting_evals.evaluation) AS practice_eval,
                                  CASE positions.whose_turn
                                     WHEN TRUE THEN initial_evals.evaluation - resulting_evals.evaluation  -- WHITE
                                     WHEN FALSE THEN resulting_evals.evaluation - initial_evals.evaluation  -- BLACK
                                  END evaluation_loss,
+                                 CASE positions.whose_turn
+                                    WHEN TRUE THEN initial_evals.evaluation - IFNULL(practice_evals.evaluation, resulting_evals.evaluation) -- WHITE
+                                    WHEN FALSE THEN IFNULL(practice_evals.evaluation, resulting_evals.evaluation) - initial_evals.evaluation -- BLACK
+                                 END practice_loss,
                                  positions.frequency as frequency,
                                  last_seen.timestamp as last_seen_in_real_game,
-                                 JULIANDAY("NOW") - JULIANDAY(last_seen.timestamp) as days_since_last_seen
-                             FROM latest_move_attempts
-                             INNER JOIN stockfish_evaluations initial_evals ON latest_move_attempts.position = initial_evals.position
-                             INNER JOIN stockfish_evaluations resulting_evals ON latest_move_attempts.resulting_position = resulting_evals.position
-                             INNER JOIN summarised_positions positions ON latest_move_attempts.position = positions.position
-                             INNER JOIN latest_time_position_seen_in_game last_seen ON latest_move_attempts.position = last_seen.position
+                                 JULIANDAY("NOW") - JULIANDAY(last_seen.timestamp) as days_since_last_seen,
+                                 IFNULL(last_practice.timestamp, last_seen.timestamp) as last_practiced_timestamp,
+                                 JULIANDAY("NOW") - IFNULL(JULIANDAY(last_practice.timestamp), JULIANDAY(last_seen.timestamp)) as days_since_last_practiced
+                             FROM latest_real_move_attempts
+                             INNER JOIN combined_engine_evaluation initial_evals ON latest_real_move_attempts.position = initial_evals.position
+                             INNER JOIN combined_engine_evaluation resulting_evals ON latest_real_move_attempts.resulting_position = resulting_evals.position
+                             INNER JOIN summarised_positions positions ON latest_real_move_attempts.position = positions.position
+                             INNER JOIN latest_time_position_seen_in_game last_seen ON latest_real_move_attempts.position = last_seen.position
+                             LEFT JOIN latest_practice_move_attempts last_practice ON latest_real_move_attempts.position = last_practice.position
+                             LEFT JOIN combined_engine_evaluation practice_evals ON last_practice.resulting_position = practice_evals.position
                              WHERE positions.is_users_turn = 1
                              """)
         
         self.con.execute(f"""CREATE TEMP VIEW move_attempt_analysis AS
                              SELECT
                                 *,
-                                evaluation_loss * frequency / days_since_last_seen AS priority
+                                evaluation_loss * frequency * days_since_last_practiced / days_since_last_seen AS priority
                              FROM move_attempt_analysis_stage_0
                              ORDER BY priority DESC""")
 
@@ -209,6 +264,13 @@ class Database:
             query_timestamp TIMESTAMP NOT NULL DEFAULT NOW,
             PRIMARY KEY (fen, source, band)
         )""")
+
+    def value_exists(self, table, column, value) -> bool:
+        """Check if a single value exists within a column."""
+        return bool(self.con.execute(f"""SELECT EXISTS (SELECT 1 
+                                                        FROM {table} 
+                                                        WHERE {column}=?
+                                                        LIMIT 1)""", (value, )).fetchone()[0])
 
     def position_last_played(self, position: str):
         result = self.con.execute(f"SELECT timestamp FROM latest_time_position_seen_in_game WHERE position = '{position}'").fetchone()
@@ -309,21 +371,83 @@ class Database:
         for n, i in enumerate(positions_to_evaluate):
             fen = f"{i} 0 0"
             board = chess.Board(fen=fen)
-            if board.is_game_over() or (not board.is_valid()):
-                continue
-            eval = stockfish_evaluation(board=board, engine=engine, depth=min_depth)
+            eval = self.stockfish_evaluation(board=board, engine=engine, depth=min_depth, commit=False)
             logging.info(f"Stockfish evaluation done! {n} / {len(positions_to_evaluate)}")
-            self.con.execute(f"""INSERT INTO stockfish_evaluations (position,depth,evaluation,best_move) VALUES(?,?,?,?)""",
-                             (
-                                i,
-                                min_depth,
-                                eval[0],
-                                eval[1]
-                             ))
             if n % 100 == 0:
                 self.con.commit()
         
         self.con.commit()
+
+
+    def full_leela_evaluation(self, engine, min_nodes: int = 100):
+        """Ensure full coverage in cached leela evaluations at the wanted depth/s"""
+        positions_to_evaluate = self.all_positions() - set([i[0] for i in self.con.execute(f"SELECT position FROM leela_evaluations WHERE nodes >= {min_nodes}").fetchall()])
+        for n, i in enumerate(positions_to_evaluate):
+            fen = f"{i} 0 0"
+            board = chess.Board(fen=fen)
+            self.leela_evaluation(board=board, engine=engine, nodes=min_nodes, commit=False)
+            logging.info(f"Leela evaluation done! {n} / {len(positions_to_evaluate)}")
+            if n % 100 == 0:
+                self.con.commit()
+        
+        self.con.commit()
+
+    
+    def stockfish_evaluation(self, board: chess.Board, engine: chess.engine.SimpleEngine, depth=10, multipv=1, commit: bool = True) -> Tuple[float, chess.Move]:
+        position = board_position(board)
+
+        if bool(self.con.execute(f"""SELECT EXISTS (SELECT 1 
+                                                    FROM stockfish_evaluations 
+                                                    WHERE position='{position}'
+                                                    AND depth>={depth}
+                                                    LIMIT 1)""").fetchone()[0]):
+            return NotImplementedError()
+
+        if self.board.outcome() is not None:
+            if self.board.outcome().winner is None:
+                return (0.5, None)  # Draw
+            return (self.board.outcome().winner, None)  # 1 for white and 0 for black
+        
+        if not board.is_valid():
+            return (None, None)
+        
+        result = engine_evaluation(board=board, engine=engine, limit=chess.engine.Limit(depth=depth), multipv=multipv)
+
+        self.con.execute(f"""INSERT INTO stockfish_evaluations (position,depth,evaluation,best_move) VALUES(?,?,?,?)""",
+                         (
+                            board_position(board),
+                            depth,
+                            eval[0],
+                            board.san(eval[1])
+                         ))
+        if commit:
+            self.con.commit()
+
+        return result
+        
+    def leela_evaluation(self, board: chess.Board, engine: chess.engine.SimpleEngine, nodes=1_000, multipv=1, commit: bool = True) -> Tuple[float, chess.Move]:
+        if self.board.outcome() is not None:
+            if self.board.outcome().winner is None:
+                return (0.5, None)  # Draw
+            return (self.board.outcome().winner, None)  # 1 for white and 0 for black
+        
+        if not board.is_valid():
+            return (None, None)
+        
+        result = engine_evaluation(board=board, engine=engine, limit=chess.engine.Limit(nodes=nodes), multipv=multipv)
+
+        self.con.execute(f"""INSERT INTO leela_evaluations (position,nodes,evaluation,best_move) VALUES(?,?,?,?)""",
+                         (
+                            board_position(board),
+                            nodes,
+                            eval[0],
+                            board.san(eval[1])
+                         ))
+        
+        if commit:
+            self.con.commit()
+
+        return result
 
 
     def log_human_move(self, board: chess.Board, timestamp: datetime.datetime, player: str, move: chess.Move, is_real: bool, time_control: str):

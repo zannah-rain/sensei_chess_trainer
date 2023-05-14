@@ -152,6 +152,8 @@ class EasyChessGui:
         if self._leela is None:
             logging.info("Starting Leela")
             self._leela = chess.engine.SimpleEngine.popen_uci(self.settings["Leela Executable"])
+        
+        return self._leela
 
     @property
     def game(self) -> chess.pgn.Game:
@@ -650,6 +652,7 @@ class EasyChessGui:
 
             if button == "Build puzzles":
                 self.database.full_stockfish_evaluation(engine=self.stockfish())
+                self.database.full_leela_evaluation(engine=self.leela())
 
             if button == "->":
                 next_node = self.game_node.next()
