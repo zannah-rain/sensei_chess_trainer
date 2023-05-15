@@ -2,6 +2,7 @@ import sqlite3
 from utils.lichess_api import client as lichess_client
 from utils.puzzle import Puzzle
 from utils.position import *
+from utils.engine import Engine
 from io import StringIO
 import chess.pgn
 import datetime
@@ -23,22 +24,10 @@ from typing import Tuple
 logging.basicConfig(level=logging.INFO)
 
 
-def engine_evaluation(board: chess.Board, engine: chess.engine.SimpleEngine, limit: chess.engine.Limit, multipv: int=1) -> Tuple[float, chess.Move]:
-    # Check the game isn't over already cos engines bug out if so
-    if board.outcome() is not None:
-        if board.outcome().winner is None:
-            return 0.5  # Draw
-        return board.outcome().winner  # 1 for white and 0 for black
-
-    engine_eval = engine.analyse(board, limit, multipv=multipv)
-    engine_eval[0]["score"] = engine_eval[0]["score"].white().wdl().expectation()  # Converting to json friendly format
-
-    return (engine_eval[0]["score"], engine_eval[0]["pv"][0])
-
-
 class Database:
     """Wrapper for stuff I want to keep track of that's gotten too complicated to just save in loads of .json files."""
-    def __init__(self, file="chess_database.db", rated_only: bool = True):
+    def __init__(self, 
+                 file="chess_database.db"):
         self.con = sqlite3.connect(database=file)
         self.con.row_factory = sqlite3.Row
         self.initialise_database_schema()
@@ -364,91 +353,66 @@ class Database:
                             timestamp.strftime("%Y-%m-%d %H:%M:%S"),
                             int(board.turn)
                          ))
-    
-    def full_stockfish_evaluation(self, engine, min_depth: int = 10):
-        """Ensure full coverage in cached stockfish evaluations at the wanted depth/s"""
-        positions_to_evaluate = self.all_positions() - set([i[0] for i in self.con.execute(f"SELECT position FROM stockfish_evaluations WHERE depth >= {min_depth}").fetchall()])
+
+    def full_engine_evaluation(self,
+                               engine: Engine,
+                               depth_value: int):
+        """Ensure full coverage in cached engine evaluations for the given engine at the wanted depth"""
+        positions_to_evaluate = self.all_positions() - set([i[0] for i in self.con.execute(f"SELECT position FROM {engine.evaluations_table} WHERE {engine.depth_parameter} >= {depth_value}").fetchall()])
         for n, i in enumerate(positions_to_evaluate):
             fen = f"{i} 0 0"
             board = chess.Board(fen=fen)
-            eval = self.stockfish_evaluation(board=board, engine=engine, depth=min_depth, commit=False)
-            logging.info(f"Stockfish evaluation done! {n} / {len(positions_to_evaluate)}")
+            self.engine_evaluation(board=board, engine=engine, depth_value=depth_value, commit=False)
+            logging.info(f"{engine.name} evaluation done! {n} / {len(positions_to_evaluate)}")
             if n % 100 == 0:
                 self.con.commit()
         
         self.con.commit()
 
-
-    def full_leela_evaluation(self, engine, min_nodes: int = 100):
-        """Ensure full coverage in cached leela evaluations at the wanted depth/s"""
-        positions_to_evaluate = self.all_positions() - set([i[0] for i in self.con.execute(f"SELECT position FROM leela_evaluations WHERE nodes >= {min_nodes}").fetchall()])
-        for n, i in enumerate(positions_to_evaluate):
-            fen = f"{i} 0 0"
-            board = chess.Board(fen=fen)
-            self.leela_evaluation(board=board, engine=engine, nodes=min_nodes, commit=False)
-            logging.info(f"Leela evaluation done! {n} / {len(positions_to_evaluate)}")
-            if n % 100 == 0:
-                self.con.commit()
-        
-        self.con.commit()
-
-    
-    def stockfish_evaluation(self, board: chess.Board, engine: chess.engine.SimpleEngine, depth=10, multipv=1, commit: bool = True) -> Tuple[float, chess.Move]:
+    def engine_evaluation(self, 
+                          board: chess.Board, 
+                          engine: Engine, 
+                          depth_value: int, 
+                          multipv: int = 1, 
+                          commit: bool = True,
+                          exact_requirements: bool = False):
         position = board_position(board)
 
+        if exact_requirements:
+            comparator = "="
+        else:
+            comparator = ">="
+
         if bool(self.con.execute(f"""SELECT EXISTS (SELECT 1 
-                                                    FROM stockfish_evaluations 
+                                                    FROM {engine.evaluations_table} 
                                                     WHERE position='{position}'
-                                                    AND depth>={depth}
+                                                    AND {engine.depth_parameter}{comparator}{depth_value}
                                                     LIMIT 1)""").fetchone()[0]):
-            return NotImplementedError()
-
-        if self.board.outcome() is not None:
-            if self.board.outcome().winner is None:
-                return (0.5, None)  # Draw
-            return (self.board.outcome().winner, None)  # 1 for white and 0 for black
+            return dict(self.con.execute(f"""SELECT evaluation
+                                             FROM {engine.evaluations_table}
+                                             WHERE position='{position}'
+                                             AND {engine.depth_parameter}{comparator}{depth_value}
+                                             ORDER BY {engine.depth_parameter} DESC
+                                             LIMIT 1""").fetchone()[0])["evaluation"]
         
-        if not board.is_valid():
-            return (None, None)
-        
-        result = engine_evaluation(board=board, engine=engine, limit=chess.engine.Limit(depth=depth), multipv=multipv)
+        result = engine.evaluate_board(board=board, depth_value=depth_value)
 
-        self.con.execute(f"""INSERT INTO stockfish_evaluations (position,depth,evaluation,best_move) VALUES(?,?,?,?)""",
+        if result is None:
+            return None
+        
+        basic_result = (result[0]["score"], result[0]["pv"][0])  # Simplify to evaluation, best_move
+
+        self.con.execute(f"""INSERT INTO {engine.evaluations_table} (position,{engine.depth_parameter},evaluation,best_move) VALUES(?,?,?,?)""",
                          (
                             board_position(board),
-                            depth,
-                            eval[0],
-                            board.san(eval[1])
+                            depth_value,
+                            basic_result[0],
+                            board.san(basic_result[1])
                          ))
         if commit:
             self.con.commit()
 
         return result
-        
-    def leela_evaluation(self, board: chess.Board, engine: chess.engine.SimpleEngine, nodes=1_000, multipv=1, commit: bool = True) -> Tuple[float, chess.Move]:
-        if self.board.outcome() is not None:
-            if self.board.outcome().winner is None:
-                return (0.5, None)  # Draw
-            return (self.board.outcome().winner, None)  # 1 for white and 0 for black
-        
-        if not board.is_valid():
-            return (None, None)
-        
-        result = engine_evaluation(board=board, engine=engine, limit=chess.engine.Limit(nodes=nodes), multipv=multipv)
-
-        self.con.execute(f"""INSERT INTO leela_evaluations (position,nodes,evaluation,best_move) VALUES(?,?,?,?)""",
-                         (
-                            board_position(board),
-                            nodes,
-                            eval[0],
-                            board.san(eval[1])
-                         ))
-        
-        if commit:
-            self.con.commit()
-
-        return result
-
 
     def log_human_move(self, board: chess.Board, timestamp: datetime.datetime, player: str, move: chess.Move, is_real: bool, time_control: str):
         """Should be called ONCE for each attempted human move for each position, real or practice game, user or opponent."""

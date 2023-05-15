@@ -49,6 +49,7 @@ import platform as sys_plat
 from utils.constants import *
 from utils.position import *
 from utils.puzzle import Puzzle
+from utils.engine import Engine
 from zPosition import zPosition
 from pathlib import Path
 from typing import Dict
@@ -98,11 +99,11 @@ class EasyChessGui:
                                  save_file=Path("EasyChessGuiSettings.json"),
                                  settings_screen_title="Sensei Settings:")
 
-        self.theme = theme
-        self.gui_theme = 'Reddit'
+        self.theme: str = theme
+        self.gui_theme: str = 'Reddit'
         
         self.menu_elem = None
-        self.username = 'Acolyte Zoe'
+        self.username: str = 'Acolyte Zoe'
 
         # output gui elements
         self.text_output_board_date_seen = None
@@ -136,22 +137,26 @@ class EasyChessGui:
         self._stockfish = None
         self._leela = None
 
-    def engines(self) -> Dict[str, chess.engine.SimpleEngine]:
+    def engines(self) -> Dict[str, Engine]:
         return {"stockfish": self.stockfish(), "leela": self.leela()}
     
-    def stockfish(self) -> chess.engine.SimpleEngine:
+    def stockfish(self) -> Engine:
         if self._stockfish is None:
             logging.info("Starting Stockfish")
-            self._stockfish = chess.engine.SimpleEngine.popen_uci(self.settings["Stockfish Executable"])
+            self._stockfish = Engine(engine=chess.engine.SimpleEngine.popen_uci(self.settings["Stockfish Executable"]), 
+                                     name="stockfish",
+                                     depth_parameter="depth")
             self._stockfish.configure({"Hash": int(psutil.virtual_memory().available / 1024 / 1024 * 0.3)})  # 75% of available ram
             self._stockfish.configure({"Threads": int(psutil.cpu_count(logical=True) - 3)})
         
         return self._stockfish
 
-    def leela(self) -> chess.engine.SimpleEngine:
+    def leela(self) -> Engine:
         if self._leela is None:
             logging.info("Starting Leela")
-            self._leela = chess.engine.SimpleEngine.popen_uci(self.settings["Leela Executable"])
+            self._leela = Engine(engine=chess.engine.SimpleEngine.popen_uci(self.settings["Leela Executable"]), 
+                                 name="leela",
+                                 depth_parameter="nodes")
         
         return self._leela
 
@@ -651,8 +656,8 @@ class EasyChessGui:
                 self.database.download_latest_games()
 
             if button == "Build puzzles":
-                self.database.full_stockfish_evaluation(engine=self.stockfish())
-                self.database.full_leela_evaluation(engine=self.leela())
+                self.database.full_engine_evaluation(engine=self.stockfish(), depth_value=10)
+                self.database.full_engine_evaluation(engine=self.leela(), depth_value=100)
 
             if button == "->":
                 next_node = self.game_node.next()
