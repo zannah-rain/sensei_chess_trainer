@@ -1052,10 +1052,10 @@ if __name__ == "__main__":
     # Depth of 21 can hit lichess rate limit, 22 seems like the best 'quick' number
     # Big time increase after 40
     # 35 seems doable for smaller repertoires
-    MIN_DEPTH = 20
-    LEELA_NODES = 5_000
+    MIN_DEPTH = 25
+    LEELA_NODES = 10_000
     MIN_LIKELIHOOD = 0.001
-    MIN_PROBABILISTIC_EVALUATION_LIKELIHOOD = 0.001
+    MIN_PROBABILISTIC_EVALUATION_LIKELIHOOD = 0.01
     PROBABILISTIC_EFFECT_CAP = 0.01
     OUT_POSTFIX = "_repertoire"
     MIN_ILLUSTRATIVE_DEPTH = 0
@@ -1063,7 +1063,7 @@ if __name__ == "__main__":
     # For weighted average repertoire
     STOCKFISH_LEELA_WEIGHT=0.5
     ENGINE_NODE_WEIGHT=0.000002
-    LICHESS_GAME_WEIGHT=0.0005
+    LICHESS_GAME_WEIGHT=0.001
     MASTER_GAME_WEIGHT=1
     DEBUG_POSITIONS = {chess.STARTING_FEN: "Starting position",
                        "rnbqkbnr/pp1ppppp/8/2p5/4P3/5N2/PPPP1PPP/RNBQKB1R b KQkq - 1 2": "Sicilian",
@@ -1071,7 +1071,7 @@ if __name__ == "__main__":
                        "rnbqkb1r/pp2pppp/3p1n2/8/3NP3/2N5/PPP2PPP/R1BQKB1R b KQkq - 2 5": "Open Sicilian decision point",  # 
                        "rnbqkbnr/1p1p1ppp/p3p3/8/3NP3/2N5/PPP2PPP/R1BQKB1R b KQkq - 1 5": "Kan Sicilian",  # 
     }
-    ENGINE_WEIGHT_CAPCOLLAR=((300, (1.0, 0.99)), (1_000, (0.98, 0.99)), (5_000, (0.97, 0.99)), (10_000, (0.95, 0.98)), (100_000, (0.5, 0.65)), (500_000, (0.4, 0.41)))
+    ENGINE_WEIGHT_CAPCOLLAR=((300, (1.0, 0.99)), (1_000, (0.98, 0.99)), (5_000, (0.95, 0.98)), (10_000, (0.70, 0.80)), (100_000, (0.5, 0.65)), (500_000, (0.4, 0.41)))
 
     black_repertoire = a.create_weighted_average_opening_training(engines=engines, 
                                                                   side=chess.BLACK, 
