@@ -482,7 +482,8 @@ class zPosition:
                                         starting_likelihood=1, 
                                         min_games=200, 
                                         leela_nodes=10_000,
-                                        effect_cap=0.03):
+                                        effect_cap=0.01,
+                                        master_only: bool = True):
         """
         Expected value of engine evaluation when played against human move probabilities in resulting positions.
         Any subsequent position at least min_likelihood will be included specifically, less frequent positions will be assumed to have the overall evaluation
@@ -507,14 +508,19 @@ class zPosition:
 
             base_eval = this_position.engine_evaluation(engines=engines, depth=min_depth, leela_nodes=leela_nodes)
 
-            this_position_games = this_position.lichess_game_count + this_position.lichess_master_game_count
+            if master_only:
+                this_position_games = this_position.lichess_master_game_count
+                this_position_frequencies = this_position.lichess_master_move_frequencies
+            else:
+                this_position_games = this_position.lichess_master_game_count + this_position.lichess_game_count
+                this_position_frequencies = this_position.lichess_move_frequencies
 
-            if (this_position_games < min_games) or (this_position.lichess_move_frequencies is None):
+            if (this_position_games < min_games) or (this_position_frequencies is None):
                 return base_eval
 
             subvariations_accounted_for = 0  # frequency allocation so infrequent children can just be guessed
             expected_eval = 0
-            for move, frequency in this_position.lichess_move_frequencies.items():
+            for move, frequency in this_position_frequencies.items():
                 this_frequency = frequency * current_likelihood
                 if (this_frequency >= min_likelihood) and (this_position_games * frequency >= min_games):
                     next_node = game_node.add_variation(chess.Move.from_uci(move))
@@ -667,6 +673,7 @@ class zPosition:
                            current_likelihood=1,
                            min_weight=30,
                            debug_positions=None,
+                           probabilistic_effect_cap=0.01,
                            engine_weight_capcollar=((30, (1.0, 1.0)), (100, (0.95, 0.99)), (500, (0.97, 0.99)), (1_000, (0.9, 0.95)), (10_000, (0.8, 0.9)), (100_000, (0.75, 0.8)))) -> Dict:
         """
         Combines Stockfish, Leela, Master Stats & Amateur Stats to find an overall best move.
@@ -683,7 +690,8 @@ class zPosition:
                                         current_likelihood=likelihood,
                                         min_weight=min_weight,
                                         debug_positions=debug_positions,
-                                        engine_weight_capcollar=engine_weight_capcollar)["move"]
+                                        engine_weight_capcollar=engine_weight_capcollar,
+                                        probabilistic_effect_cap=probabilistic_effect_cap)["move"]
 
         side = self.board.turn
 
@@ -701,7 +709,7 @@ class zPosition:
         
         if engine_node_weight != 0:
             candidates_engine_evaluations = {move: candidates_positions[move].engine_evaluation(engines=engines, depth=min_depth, leela_nodes=leela_nodes) for move in candidates_moves}  # Could be min_depth -1 but this will probably save processing in long run
-            candidates_probabilistic_evals = {move: candidates_positions[move].probabilistic_engine_evaluation(engines=engines, side=side, min_likelihood=min_probabilistic_eval_likelihood, starting_likelihood=current_likelihood, leela_nodes=leela_nodes, min_depth=min_depth) for move in candidates_moves}
+            candidates_probabilistic_evals = {move: candidates_positions[move].probabilistic_engine_evaluation(engines=engines, side=side, min_likelihood=min_probabilistic_eval_likelihood, starting_likelihood=current_likelihood, leela_nodes=leela_nodes, min_depth=min_depth, effect_cap=probabilistic_effect_cap) for move in candidates_moves}
             candidates_gross_engine_weights = {move: candidates_positions[move].engine_evaluation_nodes * engine_node_weight for move in candidates_moves}
             
             # The engine evaluation delta is measured against the top move, the others against the weighted average. This is to try to avoid outliers in the other two. Min depth guards against engine outliers.
@@ -722,53 +730,53 @@ class zPosition:
         
         if (lichess_game_weight != 0) and (self.lichess_game_count * lichess_game_weight >= min_weight):
             candidates_lichess_evaluations = {move: candidates_positions[move].lichess_white_evaluation_historic for move in candidates_moves}
-            candidates_lichess_evaluations_recursive = {move: candidates_positions[move].recursive_lichess_stats(side=side,
-                                                                                                                 move_selection_function=move_selection_function_for_recursion,
-                                                                                                                 master=False,
-                                                                                                                 current_frequency=current_likelihood,
-                                                                                                                 min_frequency=min_probabilistic_eval_likelihood,
-                                                                                                                 min_games=min_weight / lichess_game_weight,
-                                                                                                                 effect_cap=1.5) for move in candidates_moves}
+            # candidates_lichess_evaluations_recursive = {move: candidates_positions[move].recursive_lichess_stats(side=side,
+            #                                                                                                      move_selection_function=move_selection_function_for_recursion,
+            #                                                                                                      master=False,
+            #                                                                                                      current_frequency=current_likelihood,
+            #                                                                                                      min_frequency=min_probabilistic_eval_likelihood,
+            #                                                                                                      min_games=min_weight / lichess_game_weight,
+            #                                                                                                      effect_cap=1.5) for move in candidates_moves}
             candidates_gross_lichess_weights = {move: candidates_positions[move].lichess_game_count * lichess_game_weight for move in candidates_moves}
             sum_gross_lichess_weight = sum(candidates_gross_lichess_weights.values())
             if sum_gross_lichess_weight != 0:
                 lichess_evaluation_weighted_average = sum({move: candidates_lichess_evaluations[move] * candidates_gross_lichess_weights[move] for move in candidates_moves}.values()) / sum_gross_lichess_weight
-                lichess_evaluation_weighted_average_rec = sum({move: candidates_lichess_evaluations_recursive[move] * candidates_gross_lichess_weights[move] for move in candidates_moves}.values()) / sum_gross_lichess_weight
+                # lichess_evaluation_weighted_average_rec = sum({move: candidates_lichess_evaluations_recursive[move] * candidates_gross_lichess_weights[move] for move in candidates_moves}.values()) / sum_gross_lichess_weight
             else:
                 lichess_evaluation_weighted_average = 0.5
-                candidates_lichess_evaluations_recursive = 0.5
+                # candidates_lichess_evaluations_recursive = 0.5
             candidates_lichess_evaluations_deltas = {move: candidates_lichess_evaluations[move] - lichess_evaluation_weighted_average for move in candidates_moves}
-            candidates_lichess_evaluations_recursive_deltas = {move: candidates_lichess_evaluations_recursive[move] - lichess_evaluation_weighted_average_rec for move in candidates_moves}
+            # candidates_lichess_evaluations_recursive_deltas = {move: candidates_lichess_evaluations_recursive[move] - lichess_evaluation_weighted_average_rec for move in candidates_moves}
         else:
             candidates_lichess_evaluations = {move: 0 for move in candidates_moves}
             candidates_gross_lichess_weights = {move: 0 for move in candidates_moves}
             candidates_lichess_evaluations_deltas = {move: 0 for move in candidates_moves}
-            candidates_lichess_evaluations_recursive_deltas = {move: 0 for move in candidates_moves}
+            # candidates_lichess_evaluations_recursive_deltas = {move: 0 for move in candidates_moves}
         
         if (lichess_master_game_weight != 0) and (self.lichess_master_game_count * lichess_master_game_weight >= min_weight):
             candidates_lichess_master_evaluations = {move: candidates_positions[move].lichess_master_white_evaluation_historic for move in candidates_moves}
-            candidates_lichess_master_evaluations_recursive = {move: candidates_positions[move].recursive_lichess_stats(side=side,
-                                                                                                                        move_selection_function=move_selection_function_for_recursion,
-                                                                                                                        master=True,
-                                                                                                                        current_frequency=current_likelihood,
-                                                                                                                        min_frequency=min_probabilistic_eval_likelihood,
-                                                                                                                        min_games=min_weight / lichess_master_game_weight,
-                                                                                                                        effect_cap=1.5) for move in candidates_moves}
+            # candidates_lichess_master_evaluations_recursive = {move: candidates_positions[move].recursive_lichess_stats(side=side,
+            #                                                                                                             move_selection_function=move_selection_function_for_recursion,
+            #                                                                                                             master=True,
+            #                                                                                                             current_frequency=current_likelihood,
+            #                                                                                                             min_frequency=min_probabilistic_eval_likelihood,
+            #                                                                                                             min_games=min_weight / lichess_master_game_weight,
+            #                                                                                                             effect_cap=1.5) for move in candidates_moves}
             candidates_gross_lichess_master_weights = {move: candidates_positions[move].lichess_master_game_count * lichess_master_game_weight for move in candidates_moves}
             sum_gross_master_weight = sum(candidates_gross_lichess_master_weights.values())
             if sum_gross_master_weight != 0:
                 lichess_master_evaluation_weighted_average = sum({move: candidates_lichess_master_evaluations[move] * candidates_gross_lichess_master_weights[move] for move in candidates_moves}.values()) / sum_gross_master_weight
-                lichess_master_evaluation_weighted_average_rec = sum({move: candidates_lichess_master_evaluations_recursive[move] * candidates_gross_lichess_master_weights[move] for move in candidates_moves}.values()) / sum_gross_master_weight
+                # lichess_master_evaluation_weighted_average_rec = sum({move: candidates_lichess_master_evaluations_recursive[move] * candidates_gross_lichess_master_weights[move] for move in candidates_moves}.values()) / sum_gross_master_weight
             else:
                 lichess_master_evaluation_weighted_average = 0.5
-                lichess_master_evaluation_weighted_average_rec = 0.5
+                # lichess_master_evaluation_weighted_average_rec = 0.5
             candidates_lichess_master_evaluations_deltas = {move: candidates_lichess_master_evaluations[move] - lichess_master_evaluation_weighted_average for move in candidates_moves}
-            candidates_lichess_master_evaluations_recursive_deltas = {move: candidates_lichess_master_evaluations_recursive[move] - lichess_master_evaluation_weighted_average_rec for move in candidates_moves}
+            # candidates_lichess_master_evaluations_recursive_deltas = {move: candidates_lichess_master_evaluations_recursive[move] - lichess_master_evaluation_weighted_average_rec for move in candidates_moves}
         else:
             candidates_lichess_master_evaluations = {move: 0 for move in candidates_moves}
             candidates_gross_lichess_master_weights = {move: 0 for move in candidates_moves}
             candidates_lichess_master_evaluations_deltas = {move: 0 for move in candidates_moves}
-            candidates_lichess_master_evaluations_recursive_deltas = {move: 0 for move in candidates_moves}
+            # candidates_lichess_master_evaluations_recursive_deltas = {move: 0 for move in candidates_moves}
         
         candidates_gross_total_weights = {move: candidates_gross_engine_weights[move] + candidates_gross_lichess_weights[move] + candidates_gross_lichess_master_weights[move] for move in candidates_moves}
         candidates_gross_all_lichess_weights = {move: candidates_gross_lichess_weights[move] + candidates_gross_lichess_master_weights[move] for move in candidates_moves}
@@ -799,7 +807,7 @@ class zPosition:
             this_lichess_weight = candidates_gross_lichess_weights[candidate_move] * non_engine_capcol_multiplier / candidates_gross_total_weights[candidate_move]
             this_lichess_master_weight = candidates_gross_lichess_master_weights[candidate_move] * non_engine_capcol_multiplier / candidates_gross_total_weights[candidate_move]
 
-            candidate_weighted_evaluation = (candidates_engine_evaluations_probabilistic_delta[candidate_move] * this_engine_weight) + (candidates_lichess_evaluations_recursive_deltas[candidate_move] * this_lichess_weight) + (candidates_lichess_master_evaluations_recursive_deltas[candidate_move] * this_lichess_master_weight)
+            candidate_weighted_evaluation = (candidates_engine_evaluations_probabilistic_delta[candidate_move] * this_engine_weight) + (candidates_lichess_evaluations_deltas[candidate_move] * this_lichess_weight) + (candidates_lichess_master_evaluations_deltas[candidate_move] * this_lichess_master_weight)
             candidates_final_evaluations[candidate_move] = candidate_weighted_evaluation
             candidates_initial_weights[candidate_move] = f"(Engine {pre_capcol_engine_weight:.2f})(Lichess {candidates_gross_lichess_weights[candidate_move] / candidates_gross_total_weights[candidate_move]:.2f})(Master {candidates_gross_lichess_master_weights[candidate_move] / candidates_gross_total_weights[candidate_move]:.2f})"
             candidates_final_weights[candidate_move] = f"(Engine {this_engine_weight:.2f})(Lichess {this_lichess_weight:.2f})(Master {this_lichess_master_weight:.2f})"
@@ -837,9 +845,9 @@ class zPosition:
                 eval_frame = pd.concat([pd.Series(candidates_engine_evaluations_delta, name="engine"), 
                                         pd.Series(candidates_engine_evaluations_probabilistic_delta, name="engine_probabilistic"),
                                         pd.Series(candidates_lichess_evaluations_deltas, name="lichess"), 
-                                        pd.Series(candidates_lichess_evaluations_recursive_deltas, name="lichess_recursive"),
+                                        # pd.Series(candidates_lichess_evaluations_recursive_deltas, name="lichess_recursive"),
                                         pd.Series(candidates_lichess_master_evaluations_deltas, name="master"), 
-                                        pd.Series(candidates_lichess_master_evaluations_recursive_deltas, name="master_recursive"),
+                                        # pd.Series(candidates_lichess_master_evaluations_recursive_deltas, name="master_recursive"),
                                         pd.Series(candidates_final_evaluations, name="final"), 
                                         pd.Series(candidates_gross_all_lichess_weights, name="lichess_total_weight"),
                                         # pd.Series(candidates_initial_weights, name="initial_weights"),
@@ -854,9 +862,9 @@ class zPosition:
             "engine_evaluation_delta": candidates_engine_evaluations_delta[best_move_so_far],
             "probabilistic_engine_evaluation_delta": candidates_engine_evaluations_probabilistic_delta[best_move_so_far],
             "lichess_delta": candidates_lichess_evaluations_deltas[best_move_so_far],
-            "lichess_recursive_delta": candidates_lichess_evaluations_recursive_deltas[best_move_so_far],
+            # "lichess_recursive_delta": candidates_lichess_evaluations_recursive_deltas[best_move_so_far],
             "master_delta": candidates_lichess_master_evaluations_deltas[best_move_so_far],
-            "master_recursive_delta": candidates_lichess_master_evaluations_recursive_deltas[best_move_so_far],
+            # "master_recursive_delta": candidates_lichess_master_evaluations_recursive_deltas[best_move_so_far],
             "engine_weight": best_engine_weight,
             "lichess_weight": best_lichess_weight,
             "master_weight": best_lichess_master_weight
@@ -877,6 +885,7 @@ class zPosition:
                                                  lichess_master_game_weight=1,
                                                  debug_positions=dict(),
                                                  min_illustrative_depth=5,
+                                                 probabilistic_effect_cap=0.01,
                                                  engine_weight_capcollar=((30, (1.0, 1.0)), (100, (0.95, 0.99)), (500, (0.97, 0.99)), (1_000, (0.9, 0.95)), (10_000, (0.8, 0.9)), (100_000, (0.75, 0.8)))):
         """
         Our best move is a weighted average of the engine evaluation and the lichess historic evaluation, depending on how many games & nodes on each side.
@@ -927,7 +936,8 @@ class zPosition:
                     current_likelihood=current_likelihood,
                     min_weight=min_games,
                     debug_positions=debug_positions,
-                    engine_weight_capcollar=engine_weight_capcollar)
+                    engine_weight_capcollar=engine_weight_capcollar,
+                    probabilistic_effect_cap=probabilistic_effect_cap)
                 
                 logging.info(f"Appending best holistic move after FEN: {this_fen} - {game_node.board().san(best_move['move'])}:")
                 logging.info(f"- Sharpness {this_position.sharpness(engines=engines, min_depth=min_depth, heuristic='evaluation_depth_analysis'):.3f}")
@@ -941,9 +951,9 @@ class zPosition:
                 comment += f"\nEngine Evaluation Delta: {best_move['engine_evaluation_delta']}"
                 comment += f"\nProbabilistic Engine Evaluation Delta: {best_move['probabilistic_engine_evaluation_delta']}"
                 comment += f"\nLichess Delta: {best_move['lichess_delta']}"
-                comment += f"\nLichess Recursive Delta: {best_move['lichess_recursive_delta']}"
+                # comment += f"\nLichess Recursive Delta: {best_move['lichess_recursive_delta']}"
                 comment += f"\nMaster Delta: {best_move['master_delta']}"
-                comment += f"\nMaster Recursive Delta: {best_move['master_recursive_delta']}"
+                # comment += f"\nMaster Recursive Delta: {best_move['master_recursive_delta']}"
                 comment += f"\nEngine Weight: {best_move['engine_weight']}"
                 comment += f"\nLichess Weight: {best_move['lichess_weight']}"
                 comment += f"\nMaster Weight: {best_move['master_weight']}"
@@ -1044,8 +1054,9 @@ if __name__ == "__main__":
     # 35 seems doable for smaller repertoires
     MIN_DEPTH = 20
     LEELA_NODES = 5_000
-    MIN_LIKELIHOOD = 0.2
-    MIN_PROBABILISTIC_EVALUATION_LIKELIHOOD = 0.2
+    MIN_LIKELIHOOD = 0.001
+    MIN_PROBABILISTIC_EVALUATION_LIKELIHOOD = 0.001
+    PROBABILISTIC_EFFECT_CAP = 0.01
     OUT_POSTFIX = "_repertoire"
     MIN_ILLUSTRATIVE_DEPTH = 0
 
@@ -1073,7 +1084,8 @@ if __name__ == "__main__":
                                                                   lichess_master_game_weight=MASTER_GAME_WEIGHT,
                                                                   debug_positions=DEBUG_POSITIONS,
                                                                   engine_weight_capcollar=ENGINE_WEIGHT_CAPCOLLAR,
-                                                                  min_illustrative_depth=MIN_ILLUSTRATIVE_DEPTH)
+                                                                  min_illustrative_depth=MIN_ILLUSTRATIVE_DEPTH,
+                                                                  probabilistic_effect_cap=PROBABILISTIC_EFFECT_CAP)
     print("Black repertoire:")
     print(black_repertoire)
     print(black_repertoire, file=open(f"black{OUT_POSTFIX}.pgn", "w"), end="\n\n")
@@ -1088,7 +1100,8 @@ if __name__ == "__main__":
                                                                   lichess_master_game_weight=MASTER_GAME_WEIGHT,
                                                                   debug_positions=DEBUG_POSITIONS,
                                                                   engine_weight_capcollar=ENGINE_WEIGHT_CAPCOLLAR,
-                                                                  min_illustrative_depth=MIN_ILLUSTRATIVE_DEPTH)
+                                                                  min_illustrative_depth=MIN_ILLUSTRATIVE_DEPTH,
+                                                                  probabilistic_effect_cap=PROBABILISTIC_EFFECT_CAP)
     print("White repertoire:")
     print(white_repertoire)
     print(white_repertoire, file=open(f"white{OUT_POSTFIX}.pgn", "w"), end="\n\n")
