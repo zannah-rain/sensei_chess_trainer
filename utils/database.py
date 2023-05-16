@@ -161,7 +161,7 @@ class Database:
             move TEXT NOT NULL,
             real_or_practice INTEGER NOT NULL,
             time_control TEXT,
-            PRIMARY KEY (position, timestamp, player)
+            PRIMARY KEY (position, timestamp, player, real_or_practice)
         )""")
 
         self.con.execute(f"""CREATE TEMP VIEW latest_real_move_attempts AS
@@ -199,16 +199,16 @@ class Database:
                                  latest_real_move_attempts.*,
                                  positions.whose_turn AS whose_turn,
                                  initial_evals.evaluation AS initial_eval,
-                                 resulting_evals.evaluation AS resulting_eval,
-                                 IFNULL(practice_evals.evaluation, resulting_evals.evaluation) AS practice_eval,
+                                 resulting_evals.evaluation AS latest_real_eval,
+                                 IFNULL(practice_evals.evaluation, resulting_evals.evaluation) AS latest_practice_eval,
                                  CASE positions.whose_turn
                                     WHEN TRUE THEN initial_evals.evaluation - resulting_evals.evaluation  -- WHITE
                                     WHEN FALSE THEN resulting_evals.evaluation - initial_evals.evaluation  -- BLACK
-                                 END evaluation_loss,
+                                 END latest_real_eval_loss,
                                  CASE positions.whose_turn
                                     WHEN TRUE THEN initial_evals.evaluation - IFNULL(practice_evals.evaluation, resulting_evals.evaluation) -- WHITE
                                     WHEN FALSE THEN IFNULL(practice_evals.evaluation, resulting_evals.evaluation) - initial_evals.evaluation -- BLACK
-                                 END practice_loss,
+                                 END latest_practice_eval_loss,
                                  positions.frequency as frequency,
                                  last_seen.timestamp as last_seen_in_real_game,
                                  JULIANDAY("NOW") - JULIANDAY(last_seen.timestamp) as days_since_last_seen,
@@ -227,7 +227,7 @@ class Database:
         self.con.execute(f"""CREATE TEMP VIEW move_attempt_analysis AS
                              SELECT
                                 *,
-                                evaluation_loss * frequency * days_since_last_practiced / days_since_last_seen AS priority
+                                (latest_real_eval_loss + latest_practice_eval_loss) * frequency * days_since_last_practiced / days_since_last_seen AS priority
                              FROM move_attempt_analysis_stage_0
                              ORDER BY priority DESC""")
 
@@ -388,12 +388,12 @@ class Database:
                                                     WHERE position='{position}'
                                                     AND {engine.depth_parameter}{comparator}{depth_value}
                                                     LIMIT 1)""").fetchone()[0]):
-            return dict(self.con.execute(f"""SELECT evaluation
-                                             FROM {engine.evaluations_table}
-                                             WHERE position='{position}'
-                                             AND {engine.depth_parameter}{comparator}{depth_value}
-                                             ORDER BY {engine.depth_parameter} DESC
-                                             LIMIT 1""").fetchone()[0])["evaluation"]
+            return self.con.execute(f"""SELECT evaluation
+                                        FROM {engine.evaluations_table}
+                                        WHERE position='{position}'
+                                        AND {engine.depth_parameter}{comparator}{depth_value}
+                                        ORDER BY {engine.depth_parameter} DESC
+                                        LIMIT 1""").fetchone()[0]
         
         result = engine.evaluate_board(board=board, depth_value=depth_value)
 
@@ -412,9 +412,15 @@ class Database:
         if commit:
             self.con.commit()
 
-        return result
+        return basic_result[0]
 
-    def log_human_move(self, board: chess.Board, timestamp: datetime.datetime, player: str, move: chess.Move, is_real: bool, time_control: str):
+    def log_human_move(self, 
+                       board: chess.Board, 
+                       timestamp: datetime.datetime, 
+                       player: str, move: chess.Move, 
+                       is_real: bool, 
+                       time_control: str = None,
+                       commit: bool = True):
         """Should be called ONCE for each attempted human move for each position, real or practice game, user or opponent."""
         assert isinstance(timestamp, datetime.datetime)
 
@@ -435,6 +441,9 @@ class Database:
                             is_real,
                             time_control
                           ))
+        
+        if commit:
+            self.con.commit()
         
     def log_human_fen(self, board: chess.Board):
         """Should be called ONCE for each FEN seen in a real game."""
