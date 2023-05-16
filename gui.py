@@ -59,6 +59,7 @@ from utils.settings import Settings
 import psutil
 from globals import username
 import datetime
+import playsound
 
 logging.basicConfig(level=logging.INFO)
 
@@ -92,6 +93,11 @@ class EasyChessGui:
     queue = queue.Queue()
     
     def __init__(self, theme):
+        # Initialise hidden stuff first as properties might depend on them existing
+        self._stockfish = None
+        self._leela = None
+        self._board_perspective = None
+
         self.database = Database()
 
         self.settings = Settings(schema={"Stockfish Executable": "Path",
@@ -107,7 +113,14 @@ class EasyChessGui:
 
         # output gui elements
         self.text_output_board_date_seen = None
+        self.text_output_board_eval_stockfish = None
+        self.text_output_board_eval_leela = None
         self.text_output_puzzle_priority = None
+        self.text_output_puzzle_frequency = None
+        self.text_output_puzzle_last_practiced_date = None
+        self.text_output_puzzle_latest_attempt_move = None
+        self.text_output_puzzle_latest_attempt_evaluation = None
+        self.text_output_puzzle_latest_evaluation_loss = None
 
         # Puzzle stuff
         self.current_puzzle: Puzzle = None
@@ -124,7 +137,6 @@ class EasyChessGui:
         self.move_sq_dark_color = '#B8AF4E'
 
         self.window = None
-        self._board_perspective = None
         self.create_new_window()
         
         self.game = chess.pgn.Game()
@@ -133,9 +145,6 @@ class EasyChessGui:
         # Tracking any short term variables in between window reads
         self.move_state = 0
         self.move_from = None
-
-        self._stockfish = None
-        self._leela = None
 
     def engines(self) -> Dict[str, Engine]:
         return {"stockfish": self.stockfish(), "leela": self.leela()}
@@ -173,19 +182,17 @@ class EasyChessGui:
     def game_node(self) -> chess.pgn.GameNode:
         return self._game_node
     
+    def stockfish_evaluation(self, depth):
+        return self.database.engine_evaluation(board=self.board, engine=self.stockfish(), depth_value=depth)
+    
+    def leela_evaluation(self, nodes):
+        return self.database.engine_evaluation(board=self.board, engine=self.leela(), depth_value=nodes)
+    
+    def combined_evaluation(self, depth, nodes):
+        return (self.stockfish_evaluation(depth) + self.leela_evaluation(nodes)) / 2
+    
     @game_node.setter
     def game_node(self, value: chess.pgn.GameNode):
-        # Update GUI
-        last_seen = self.database.position_last_played(gamenode_position(value))
-        if last_seen is not None:
-            self.text_output_board_date_seen.update(f"Position last played at {last_seen}")
-        else:
-            self.text_output_board_date_seen.update(f"Position not seen in a real game")
-        if self.current_puzzle is not None:
-            self.text_output_puzzle_priority.update(f"Review Priority: {self.current_puzzle.priority}")
-        else:
-            self.text_output_puzzle_priority.update(f"Review Priority: -")
-
         # Update Board
         self.redraw_board()
         self._game_node = value
@@ -198,12 +205,45 @@ class EasyChessGui:
             if move is not None:
                 self.change_square_color(self.window, 7 - chess.square_rank(move.from_square), chess.square_file(move.from_square))
                 self.change_square_color(self.window, 7 - chess.square_rank(move.to_square), chess.square_file(move.to_square))
+        
+        # Update GUI
+        last_seen = self.database.position_last_played(gamenode_position(value))
+        if last_seen is not None:
+            self.text_output_board_date_seen.update(f"Position last played at {last_seen}")
+        else:
+            self.text_output_board_date_seen.update(f"Position not seen in a real game")
+        
+        self.text_output_board_eval_stockfish.update(f"Stockfish evaluation: {self.stockfish_evaluation(depth=10)}")
+        self.text_output_board_eval_leela.update(f"Leela evaluation: {self.leela_evaluation(nodes=100)}")
+             
+        if self.current_puzzle is not None:
+            self.text_output_puzzle_priority.update(f"Review Priority: {self.current_puzzle.priority}")
+            self.text_output_puzzle_frequency.update(f"Times seen in real games: {self.current_puzzle.frequency}")
+            self.text_output_puzzle_last_practiced_date.update(f"Time last practiced: {self.current_puzzle.latest_timestamp}")
+            if self.puzzle_attempt == 0:
+                self.text_output_puzzle_latest_real_attempt_evaluation.update(f"Latest real game eval: -hidden-")
+                self.text_output_puzzle_latest_real_attempt_evaluation_loss.update(f"Latest real game eval loss: -hidden-")
+                self.text_output_puzzle_latest_attempt_move.update(f"Last try: -hidden-")
+                self.text_output_puzzle_latest_attempt_evaluation.update(f"Last eval: -hidden-")
+                self.text_output_puzzle_latest_evaluation_loss.update(f"Last eval loss: -hidden-")
+            else:
+                self.text_output_puzzle_latest_real_attempt_evaluation.update(f"Latest real game eval: {self.current_puzzle.latest_real_eval}")
+                self.text_output_puzzle_latest_real_attempt_evaluation_loss.update(f"Latest real game eval loss: {self.current_puzzle.latest_real_eval_loss}")
+                self.text_output_puzzle_latest_attempt_move.update(f"Last try: {self.current_puzzle.latest_attempt_move}")
+                self.text_output_puzzle_latest_attempt_evaluation.update(f"Last eval: {self.current_puzzle.latest_practice_eval}")
+                self.text_output_puzzle_latest_evaluation_loss.update(f"Last eval loss: {self.current_puzzle.latest_practice_eval_loss}")
+        else:
+            self.text_output_puzzle_priority.update(f"No puzzle loaded.")
+
+    @property
+    def position(self) -> str:
+        return board_position(self.board)
     
     @property
     def board(self) -> chess.Board:
         # Accessor as changes to this board should prompt re-drawing and stuff like that
         # Don't want in general to directly modify it
-        return self._game_node.board().copy()
+        return self.game_node.board().copy()
     
     @property
     def zpos(self) -> zPosition:
@@ -518,6 +558,7 @@ class EasyChessGui:
                 
     def play_move(self, move: chess.Move):
         """Update the current board state with the given move, highlighting what's changed."""
+        playsound.playsound("sounds\move-self.mp3", block=False)
         if move in self.moves.keys():
             self.game_node = self.moves[move]
             return None
@@ -576,11 +617,29 @@ class EasyChessGui:
 
         # Named elements that might need to be updated on the fly
         self.text_output_board_date_seen = sg.Text()
+        self.text_output_board_eval_stockfish = sg.Text()
+        self.text_output_board_eval_leela = sg.Text()
+        self.text_output_board_eval = sg.Text()
+        self.text_output_puzzle_latest_real_attempt_evaluation = sg.Text()
+        self.text_output_puzzle_latest_real_attempt_evaluation_loss = sg.Text()
         self.text_output_puzzle_priority = sg.Text()
+        self.text_output_puzzle_frequency = sg.Text()
+        self.text_output_puzzle_last_practiced_date = sg.Text()
+        self.text_output_puzzle_latest_attempt_move = sg.Text()
+        self.text_output_puzzle_latest_attempt_evaluation = sg.Text()
+        self.text_output_puzzle_latest_evaluation_loss = sg.Text()
 
-
-        main_layout = [[sg.Frame("Position Info", [[self.text_output_board_date_seen]])]]
-        puzzle_layout = [[sg.Frame("Puzzle Info", [[self.text_output_puzzle_priority]])],
+        main_layout = [[sg.Frame("Position Info", [[self.text_output_board_date_seen],
+                                                   [self.text_output_board_eval_stockfish],
+                                                   [self.text_output_board_eval_leela]])]]
+        puzzle_layout = [[sg.Frame("Puzzle Info", [[self.text_output_puzzle_priority],
+                                                   [self.text_output_puzzle_frequency],
+                                                   [self.text_output_puzzle_last_practiced_date],
+                                                   [self.text_output_puzzle_latest_real_attempt_evaluation],
+                                                   [self.text_output_puzzle_latest_real_attempt_evaluation_loss],
+                                                   [self.text_output_puzzle_latest_attempt_move],
+                                                   [self.text_output_puzzle_latest_attempt_evaluation],
+                                                   [self.text_output_puzzle_latest_evaluation_loss]])],
                          [sg.Button("Next Lesson")]]
 
         # l1 is the layout for tab1
@@ -627,12 +686,35 @@ class EasyChessGui:
             if type(window_read_result) == chess.Move:
                 # Apply the move logic
                 if self.current_puzzle is not None:
-                    if self.puzzle_attempt == 0:
-                        # Log the first attempt in the database
-                        self.database.log_human_move(board=self.board, timestamp=datetime.datetime.now(), player=username, move=window_read_result, is_real=False)
-                    self.puzzle_attempt += 1
-                    self.play_move(move=window_read_result)
-                    raise NotImplementedError()
+                    if self.position == self.current_puzzle.position:
+                        if self.puzzle_attempt == 0:
+                            # Log the first attempt in the database
+                            self.database.log_human_move(board=self.board, 
+                                                         timestamp=datetime.datetime.now(), 
+                                                         player=username, 
+                                                         move=window_read_result, 
+                                                         is_real=False)
+                            
+                            def puzzle_fail():
+                                playsound.playsound("sounds//error-when-entering-the-game-menu-132111.mp3", block=False)
+                            def puzzle_success():
+                                playsound.playsound("sounds//success-1-6297.mp3", block=False)
+
+                            new_eval = self.combined_evaluation(depth=10, nodes=100)
+                            if self.board.turn == chess.WHITE:
+                                if (new_eval > self.current_puzzle.latest_real_eval) and (new_eval >= self.current_puzzle.latest_practice_eval):
+                                    puzzle_success()
+                                else:
+                                    puzzle_fail()
+                            else:
+                                if (new_eval < self.current_puzzle.latest_real_eval) and (new_eval <= self.current_puzzle.latest_practice_eval):
+                                    puzzle_success()
+                                else:
+                                    puzzle_fail()
+                        self.puzzle_attempt += 1
+                        self.play_move(move=window_read_result)
+                    else:
+                        raise NotImplementedError()
                 else:
                     self.play_move(move=window_read_result)
                 continue
