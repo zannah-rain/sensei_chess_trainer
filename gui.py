@@ -60,6 +60,7 @@ import psutil
 from globals import username
 import datetime
 import playsound
+import random
 
 logging.basicConfig(level=logging.INFO)
 
@@ -112,6 +113,7 @@ class EasyChessGui:
         self.username: str = 'Acolyte Zoe'
 
         # output gui elements
+        self.text_output_whose_turn = None
         self.text_output_board_date_seen = None
         self.text_output_board_eval_stockfish = None
         self.text_output_board_eval_leela = None
@@ -207,6 +209,12 @@ class EasyChessGui:
                 self.change_square_color(self.window, 7 - chess.square_rank(move.to_square), chess.square_file(move.to_square))
         
         # Update GUI
+        if self.game_node.turn() == chess.WHITE:
+            turn_text = "White to play"
+        else:
+            turn_text = "Black to play"
+        self.text_output_whose_turn.update(turn_text)
+
         last_seen = self.database.position_last_played(gamenode_position(value))
         if last_seen is not None:
             self.text_output_board_date_seen.update(f"Position last played at {last_seen}")
@@ -616,6 +624,7 @@ class EasyChessGui:
         self.menu_elem = sg.Menu(menu_def_neutral, tearoff=False)
 
         # Named elements that might need to be updated on the fly
+        self.text_output_whose_turn = sg.Text()
         self.text_output_board_date_seen = sg.Text()
         self.text_output_board_eval_stockfish = sg.Text()
         self.text_output_board_eval_leela = sg.Text()
@@ -654,7 +663,8 @@ class EasyChessGui:
                 [self.menu_elem],
                 [sg.Column(board_tab), 
                  sg.VSeparator(), 
-                 sg.Column([[Tg],
+                 sg.Column([[self.text_output_whose_turn],
+                            [Tg],
                             [sg.Button("Engine Move")],
                             [sg.Button("<-"), sg.Button("->")]])]
         ]
@@ -731,7 +741,8 @@ class EasyChessGui:
             if button == "Next Lesson":
                 self.current_puzzle = self.database.highest_priority_puzzle()
                 self.puzzle_attempt = 0
-                self.board_perspective = self.current_puzzle.whose_turn
+                # Randomise perspective to hopefully help learning
+                self.board_perspective = random.choice([chess.WHITE, chess.BLACK]) # self.current_puzzle.whose_turn
                 self.game = chess.pgn.Game().from_board(chess.Board(fen=position_to_fen(self.current_puzzle.position)))
 
             if button == "Download .pgn's":
