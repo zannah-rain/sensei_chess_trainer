@@ -26,7 +26,7 @@ class Engine(chess.engine.SimpleEngine):
         if board.outcome() is not None:
             if board.outcome().winner is None:
                 return 0.5  # Draw
-            return board.outcome().winner  # 1 for white and 0 for black
+            return float(board.outcome().winner)  # 1 for white and 0 for black
         
         if not board.is_valid():
             return None

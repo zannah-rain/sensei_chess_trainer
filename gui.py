@@ -118,7 +118,7 @@ class EasyChessGui:
         self.text_output_board_eval_stockfish = None
         self.text_output_board_eval_leela = None
         self.text_output_puzzle_priority = None
-        self.text_output_puzzle_frequency = None
+        self.text_output_puzzle_times_seen_in_real_games = None
         self.text_output_puzzle_last_practiced_date = None
         self.text_output_puzzle_latest_attempt_move = None
         self.text_output_puzzle_latest_attempt_evaluation = None
@@ -226,8 +226,8 @@ class EasyChessGui:
              
         if self.current_puzzle is not None:
             self.text_output_puzzle_priority.update(f"Review Priority: {self.current_puzzle.priority}")
-            self.text_output_puzzle_frequency.update(f"Times seen in real games: {self.current_puzzle.frequency}")
-            self.text_output_puzzle_last_practiced_date.update(f"Time last practiced: {self.current_puzzle.latest_timestamp}")
+            self.text_output_puzzle_times_seen_in_real_games.update(f"Times seen in real games: {self.current_puzzle.times_seen_in_real_games}")
+            self.text_output_puzzle_last_practiced_date.update(f"Time last practiced: {self.current_puzzle.latest_practiced_timestamp}")
             if self.puzzle_attempt == 0:
                 self.text_output_puzzle_latest_real_attempt_evaluation.update(f"Latest real game eval: -hidden-")
                 self.text_output_puzzle_latest_real_attempt_evaluation_loss.update(f"Latest real game eval loss: -hidden-")
@@ -632,7 +632,7 @@ class EasyChessGui:
         self.text_output_puzzle_latest_real_attempt_evaluation = sg.Text()
         self.text_output_puzzle_latest_real_attempt_evaluation_loss = sg.Text()
         self.text_output_puzzle_priority = sg.Text()
-        self.text_output_puzzle_frequency = sg.Text()
+        self.text_output_puzzle_times_seen_in_real_games = sg.Text()
         self.text_output_puzzle_last_practiced_date = sg.Text()
         self.text_output_puzzle_latest_attempt_move = sg.Text()
         self.text_output_puzzle_latest_attempt_evaluation = sg.Text()
@@ -642,7 +642,7 @@ class EasyChessGui:
                                                    [self.text_output_board_eval_stockfish],
                                                    [self.text_output_board_eval_leela]])]]
         puzzle_layout = [[sg.Frame("Puzzle Info", [[self.text_output_puzzle_priority],
-                                                   [self.text_output_puzzle_frequency],
+                                                   [self.text_output_puzzle_times_seen_in_real_games],
                                                    [self.text_output_puzzle_last_practiced_date],
                                                    [self.text_output_puzzle_latest_real_attempt_evaluation],
                                                    [self.text_output_puzzle_latest_real_attempt_evaluation_loss],

@@ -14,22 +14,18 @@ class Puzzle:
         """The priority of studying this puzzle."""
 
         # Info about when it's been seen in real games
-        self.frequency = x["frequency"]
+        self.times_seen_in_real_games = x["times_seen_in_real_games"]
         """How many times this position has been seen in a real game."""
         self.days_since_last_seen = x["days_since_last_seen"]
         """How many days (decimal) since this position has been seen in a real game."""
-        self.latest_resulting_position = x["resulting_position"]
+        self.latest_real_resulting_position = x["latest_real_resulting_position"]
         """The resulting position from the latest attempt."""
-        self.latest_timestamp = x["timestamp"]
+        self.latest_timestamp = x["last_seen_in_real_game"]
         """When the latest attempt took place."""
-        self.latest_player = x["player"]
-        """The player who made the latest attempt."""
-        self.latest_attempt_move = x["move"]
+        self.latest_attempt_move = x["latest_real_played_move"]
         """The move made on the latest attempt."""
-        self.latest_attempt_real_or_practice = x["real_or_practice"]
-        """Whether the latest attempt was in a real game (1) or practice session (0)."""
-        self.latest_time_control = x["time_control"]
-        """The time control the latest attempt was made in."""
+        self.latest_time_control = x["latest_real_time_control"]
+        """The time control the latest attempt was made in in a real game."""
         self.latest_real_eval = x["latest_real_eval"]
         """The evaluation of the latest attempt in a real game."""
         self.latest_real_eval_loss = x["latest_real_eval_loss"]
@@ -42,4 +38,6 @@ class Puzzle:
         """The evaluation loss of the latest practice attempt."""
         self.days_since_last_practiced = x["days_since_last_practiced"]
         """The days (decimal) since the position has been practiced last."""
+        self.latest_practiced_timestamp = x["last_practiced_timestamp"]
+        """When the position has last been practiced (or played in a real game)."""
         

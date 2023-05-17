@@ -32,8 +32,7 @@ class Database:
         self.con.row_factory = sqlite3.Row
         self.initialise_database_schema()
 
-    def initialise_database_schema(self):
-        # All games of interest which could be used to generate lessons / statistics
+    def initialise_games_table(self):
         self.con.execute("""CREATE TABLE IF NOT EXISTS games (
             white TEXT NOT NULL, 
             black TEXT NOT NULL, 
@@ -47,77 +46,62 @@ class Database:
             length INTEGER NOT NULL,  -- halfmoves
             PRIMARY KEY (white, black, timestamp)
             )""")
-
-        # Position table.
-        # Position refers to piece placement + who's turn + castling avaibs + en passant
-        # Does NOT include halfmove or fullmove clocks as these generally aren't relevant for evaluation and practice
-        self.con.execute("""CREATE TABLE IF NOT EXISTS positions (
-            position TEXT NOT NULL,
-            comment TEXT,
-            PRIMARY KEY (position)
-        )""")
-
-        # Tracking attempts to combine multiple forms of evaluation into a best view
-        self.con.execute("""CREATE TABLE IF NOT EXISTS combined_evaluations (
-            position TEXT NOT NULL,
-            eval REAL NOT NULL,
-            best_move TEXT NOT NULL,
-            difficulty REAL NOT NULL,
-            timestamp TIMESTAMP NOT NULL DEFAULT NOW,
-            PRIMARY KEY (position, timestamp)
-        )""")
-
+        
+    def initialise_stockfish_tables(self):
         # Tracking potentially multiple depth stockfish evaluations by position
         self.con.execute("""CREATE TABLE IF NOT EXISTS stockfish_evaluations (
             position TEXT NOT NULL,
             depth INTEGER NOT NULL,
             evaluation REAL NOT NULL,
-            best_move TEXT NOT NULL,
+            best_move TEXT,  -- Can be NULL if the position is game over
             PRIMARY KEY (position, depth)
         )""")
 
-        self.con.execute(f"""CREATE TEMP VIEW best_stockfish_evaluations AS
-                             SELECT base.*
-                             FROM stockfish_evaluations base
-                             INNER JOIN (
-                                 SELECT position, 
-                                        MAX(depth) as depth
-                                 FROM stockfish_evaluations
-                                 GROUP BY position) deepest
-                             ON base.position = deepest.position
-                             AND base.depth = deepest.depth""")
+        # Using TRIGGER instead of views to keep real time processing down, increasing update time but updates won't happen that often
+        self.con.execute("""CREATE TABLE IF NOT EXISTS best_stockfish_evaluations (
+            position TEXT NOT NULL,
+            depth INTEGER NOT NULL,
+            evaluation REAL NOT NULL,
+            best_move TEXT,  -- Can be NULL if the position is game over
+            PRIMARY KEY (position)
+        )""")
 
+        self.con.execute("""CREATE TRIGGER IF NOT EXISTS best_stockfish_recorder 
+                            AFTER INSERT ON stockfish_evaluations
+                            WHEN NEW.depth >= (SELECT MAX(depth) from stockfish_evaluations where position=NEW.position)
+                            BEGIN
+                                INSERT OR REPLACE INTO best_stockfish_evaluations(position,depth,evaluation,best_move)
+                                VALUES(NEW.position,NEW.depth,NEW.evaluation,NEW.best_move);
+                            END""")
+
+    def initialise_leela_tables(self):
         # Tracking potentially multiple depth leela evaluations by position
         self.con.execute("""CREATE TABLE IF NOT EXISTS leela_evaluations (
             position TEXT NOT NULL,
             nodes INTEGER NOT NULL,
             evaluation REAL NOT NULL,
-            best_move TEXT NOT NULL,
+            best_move TEXT,  -- NULL if position is game over
             PRIMARY KEY (position, nodes)
         )""")
 
-        self.con.execute(f"""CREATE TEMP VIEW best_leela_evaluations AS
-                             SELECT base.*
-                             FROM leela_evaluations base
-                             INNER JOIN (
-                                 SELECT position, 
-                                        MAX(nodes) as nodes
-                                 FROM leela_evaluations
-                                 GROUP BY position) deepest
-                             ON base.position = deepest.position
-                             AND base.nodes = deepest.nodes""")
+        # Using TRIGGER instead of views to keep real time processing down, increasing update time but updates won't happen that often
+        self.con.execute("""CREATE TABLE IF NOT EXISTS best_leela_evaluations (
+            position TEXT NOT NULL,
+            nodes INTEGER NOT NULL,
+            evaluation REAL NOT NULL,
+            best_move TEXT,  -- NULL if position is game over
+            PRIMARY KEY (position)
+        )""")
 
-        self.con.execute("""CREATE TEMP VIEW combined_engine_evaluation AS
-                            SELECT stockfish.position,
-                                   stockfish.evaluation,
-                                   stockfish.depth,
-                                   leela.evaluation,
-                                   leela.nodes,
-                                   (stockfish.evaluation + leela.evaluation) / 2 AS evaluation
-                            FROM best_stockfish_evaluations stockfish
-                            INNER JOIN best_leela_evaluations leela
-                            ON stockfish.position = leela.position""")
+        self.con.execute("""CREATE TRIGGER IF NOT EXISTS best_leela_recorder 
+                            AFTER INSERT ON leela_evaluations
+                            WHEN NEW.nodes >= (SELECT MAX(nodes) from leela_evaluations where position=NEW.position)
+                            BEGIN
+                                INSERT OR REPLACE INTO best_leela_evaluations(position,nodes,evaluation,best_move)
+                                VALUES(NEW.position,NEW.nodes,NEW.evaluation,NEW.best_move);
+                            END""")
 
+    def initialise_positions_tables(self):
         # Tracking which positions have been seen when, and who was playing each side
         self.con.execute(f"""CREATE TABLE IF NOT EXISTS positions_seen_in_games (
             position TEXT NOT NULL,
@@ -128,27 +112,95 @@ class Database:
             player_turn TEXT GENERATED ALWAYS AS (CASE whose_turn WHEN TRUE THEN white WHEN FALSE THEN black END) STORED,
             is_users_turn INTEGER GENERATED ALWAYS AS (player_turn == '{username}') STORED
         )""")
+        self.con.execute("""CREATE INDEX IF NOT EXISTS ipositions_seen_position on positions_seen_in_games(position)""")
 
-        self.con.execute("""CREATE INDEX IF NOT EXISTS ipositions_turn on positions_seen_in_games(position, is_users_turn)""")
+        self.con.execute("""CREATE TABLE IF NOT EXISTS positions_metadata (
+            position TEXT NOT NULL PRIMARY KEY,
+            whose_turn INTEGER NOT NULL
+        )""")
+        self.con.execute("""CREATE TRIGGER IF NOT EXISTS position_metadata_updater
+                            AFTER INSERT ON positions_seen_in_games
+                            WHEN NOT EXISTS (SELECT 1 FROM positions_metadata WHERE position=NEW.position)
+                            BEGIN
+                                INSERT INTO positions_metadata
+                                (position, whose_turn)
+                                VALUES(NEW.position, NEW.whose_turn);
+                            END""")
 
-        self.con.execute(f"""CREATE TEMP VIEW summarised_positions AS
-                             SELECT
-                                position,
-                                whose_turn,
-                                is_users_turn,
-                                COUNT(*) AS frequency
-                             FROM positions_seen_in_games
-                             GROUP BY position, is_users_turn""")
+        # Used to be grouped by is_users_turn
+        # My thinking is that because we're interested in the COUNT and RECENCY of positions, it shouldn't matter from which perspective
+        # Errors in thinking on either side should be fixed, whether we're playing as or against!
+        self.con.execute("""CREATE TABLE IF NOT EXISTS summarised_positions_seen_in_games (
+            position TEXT NOT NULL,
+            times_seen INTEGER NOT NULL,
+            latest_timestamp TIMESTAMP NOT NULL,
+            PRIMARY KEY (position)
+        )""")
+        self.con.execute("""CREATE TRIGGER IF NOT EXISTS positions_seen_in_games_counter 
+                            AFTER INSERT ON positions_seen_in_games
+                            BEGIN
+                                INSERT OR REPLACE INTO summarised_positions_seen_in_games
+                                (position,times_seen,latest_timestamp)
+                                SELECT
+                                    NEW.position,
+                                    COUNT(*),
+                                    MAX(timestamp)
+                                FROM positions_seen_in_games
+                                WHERE position=NEW.position;
+                            END""")
         
-        self.con.execute(f"""CREATE TEMP VIEW latest_time_position_seen_in_game AS 
-                             SELECT
-                                position,
-                                whose_turn,
-                                MAX(timestamp) as timestamp
-                             FROM positions_seen_in_games
-                             WHERE is_users_turn = 1
-                             GROUP BY position""")
+        
+    def initialise_combined_engine_tables(self):
+        self.con.execute("""CREATE TABLE IF NOT EXISTS combined_engine_evaluation (
+            position TEXT NOT NULL PRIMARY KEY,
+            stockfish_evaluation REAL,
+            stockfish_depth INTEGER,
+            leela_evaluation REAL,
+            leela_nodes INTEGER,
+            combined_evaluation REAL NOT NULL
+        )""")
 
+        self.con.execute("""CREATE VIEW IF NOT EXISTS combined_engine_evaluation_expensive AS
+                            SELECT
+                                stockfish.position AS position,
+                                stockfish.evaluation,
+                                stockfish.depth,
+                                leela.evaluation,
+                                leela.nodes,
+                                ((stockfish.evaluation + leela.evaluation) / 2)
+                            FROM best_stockfish_evaluations stockfish
+                            INNER JOIN best_leela_evaluations leela
+                            ON leela.position=stockfish.position""")
+
+        self.con.execute("""CREATE TRIGGER IF NOT EXISTS combined_engine_updater_stockfish
+                            AFTER INSERT ON best_stockfish_evaluations
+                            WHEN EXISTS (SELECT 1 FROM best_leela_evaluations WHERE position=NEW.position)
+                            BEGIN
+                                INSERT OR REPLACE INTO combined_engine_evaluation
+                                (position, stockfish_evaluation, stockfish_depth, leela_evaluation, leela_nodes, combined_evaluation)
+                                SELECT
+                                    *
+                                FROM combined_engine_evaluation_expensive
+                                WHERE position=NEW.position
+                                LIMIT 1;
+                            END
+                            """)
+        
+        self.con.execute("""CREATE TRIGGER IF NOT EXISTS combined_engine_updater_leela
+                            AFTER INSERT ON best_leela_evaluations
+                            WHEN EXISTS (SELECT 1 FROM best_stockfish_evaluations WHERE position=NEW.position)
+                            BEGIN
+                                INSERT OR REPLACE INTO combined_engine_evaluation
+                                (position, stockfish_evaluation, stockfish_depth, leela_evaluation, leela_nodes, combined_evaluation)
+                                SELECT
+                                    *
+                                FROM combined_engine_evaluation_expensive
+                                WHERE position=NEW.position
+                                LIMIT 1;
+                            END
+                            """)
+    
+    def initialise_move_attempts_tables(self):
         # One to many table tracking which moves have been played in each position
         # Either in an actual game (real_or_practice = 1) or not 0
         # NB that for speed, if the same position is seen more than once in one game the latest move will be recorded once
@@ -164,70 +216,117 @@ class Database:
             PRIMARY KEY (position, timestamp, player, real_or_practice)
         )""")
 
-        self.con.execute(f"""CREATE TEMP VIEW latest_real_move_attempts AS
-                             SELECT base.*
-                             FROM move_attempts base
-                             INNER JOIN (
-                                 SELECT position, 
-                                        MAX(timestamp) as timestamp
+        self.con.execute("""CREATE TABLE IF NOT EXISTS latest_real_move_attempts (
+            position TEXT NOT NULL PRIMARY KEY,
+            resulting_position TEXT NOT NULL,
+            timestamp TIMESTAMP NOT NULL,
+            move TEXT NOT NULL,
+            time_control TEXT NOT NULL
+        )""")
+        self.con.execute(f"""CREATE TRIGGER IF NOT EXISTS latest_real_move_attempts_updater
+                             AFTER INSERT ON move_attempts
+                             WHEN NEW.player='{username}' AND NEW.real_or_practice=1
+                             BEGIN
+                                 INSERT OR REPLACE INTO latest_real_move_attempts
+                                 (position, resulting_position, timestamp, move, time_control)
+                                 SELECT
+                                     position,
+                                     resulting_position,
+                                     timestamp,
+                                     move,
+                                     time_control
                                  FROM move_attempts
-                                 WHERE player = '{username}'
-                                 AND real_or_practice = 1
-                                 GROUP BY position) latest
-                             ON base.position = latest.position
-                             AND base.timestamp = latest.timestamp
-                             AND base.real_or_practice = 1
-                             AND base.player = '{username}'""")
-        
-        self.con.execute(f"""CREATE TEMP VIEW latest_practice_move_attempts AS
-                             SELECT base.*
-                             FROM move_attempts base
-                             INNER JOIN (
-                                 SELECT position, 
-                                        MAX(timestamp) as timestamp
+                                 WHERE position=NEW.position
+                                 AND player='{username}'
+                                 AND real_or_practice=1
+                                 AND timestamp=(SELECT MAX(timestamp) FROM move_attempts WHERE position=NEW.position AND player='{username}' AND real_or_practice=1)
+                                 LIMIT 1;
+                             END
+                             """)
+
+        # Whether it's a practice or real move doesn't really matter when getting the last time a move has been practiced
+        self.con.execute("""CREATE TABLE IF NOT EXISTS latest_move_attempts (
+            position TEXT NOT NULL PRIMARY KEY,
+            resulting_position TEXT NOT NULL,
+            timestamp TIMESTAMP NOT NULL,
+            move TEXT NOT NULL
+        )""")
+        self.con.execute(f"""CREATE TRIGGER IF NOT EXISTS latest_move_attempts_updater
+                             AFTER INSERT ON move_attempts
+                             WHEN NEW.player='{username}'
+                             BEGIN
+                                 INSERT OR REPLACE INTO latest_move_attempts
+                                 (position, resulting_position, timestamp, move)
+                                 SELECT
+                                     position,
+                                     resulting_position,
+                                     timestamp,
+                                     move
                                  FROM move_attempts
-                                 WHERE player = '{username}'
-                                 AND real_or_practice = 0
-                                 GROUP BY position) latest
-                             ON base.position = latest.position
-                             AND base.timestamp = latest.timestamp
-                             AND real_or_practice = 0
-                             AND base.player = '{username}'""")
+                                 WHERE position=NEW.position
+                                 AND player='{username}'
+                                 AND timestamp=(SELECT MAX(timestamp) FROM move_attempts WHERE position=NEW.position AND player='{username}');
+                             END
+                             """)
+
+    def initialise_database_schema(self):
+        # All games of interest which could be used to generate lessons / statistics
+        self.initialise_games_table()
+
+        # Position table.
+        # Position refers to piece placement + who's turn + castling avaibs + en passant
+        # Does NOT include halfmove or fullmove clocks as these generally aren't relevant for evaluation and practice
+        self.con.execute("""CREATE TABLE IF NOT EXISTS positions (
+            position TEXT NOT NULL,
+            comment TEXT,
+            PRIMARY KEY (position)
+        )""")
+
+        self.initialise_stockfish_tables()
+        self.initialise_leela_tables()
+
+        self.initialise_combined_engine_tables()
+
+        self.initialise_positions_tables()
+
+        self.initialise_move_attempts_tables()
 
         self.con.execute(f"""CREATE TEMP VIEW move_attempt_analysis_stage_0 AS 
                              SELECT 
-                                 latest_real_move_attempts.*,
-                                 positions.whose_turn AS whose_turn,
-                                 initial_evals.evaluation AS initial_eval,
-                                 resulting_evals.evaluation AS latest_real_eval,
-                                 IFNULL(practice_evals.evaluation, resulting_evals.evaluation) AS latest_practice_eval,
-                                 CASE positions.whose_turn
-                                    WHEN TRUE THEN initial_evals.evaluation - resulting_evals.evaluation  -- WHITE
-                                    WHEN FALSE THEN resulting_evals.evaluation - initial_evals.evaluation  -- BLACK
+                                 latest_real_move_attempts.position AS position,
+                                 latest_real_move_attempts.resulting_position AS latest_real_resulting_position,
+                                 latest_real_move_attempts.move AS latest_real_played_move,
+                                 latest_real_move_attempts.time_control AS latest_real_time_control,
+                                 basic_position_data.whose_turn AS whose_turn,
+                                 initial_evals.combined_evaluation AS initial_eval,
+                                 resulting_evals.combined_evaluation AS latest_real_eval,
+                                 IFNULL(practice_evals.combined_evaluation, resulting_evals.combined_evaluation) AS latest_practice_eval,
+                                 CASE basic_position_data.whose_turn
+                                    WHEN TRUE THEN initial_evals.combined_evaluation - resulting_evals.combined_evaluation  -- WHITE
+                                    WHEN FALSE THEN resulting_evals.combined_evaluation - initial_evals.combined_evaluation  -- BLACK
                                  END latest_real_eval_loss,
-                                 CASE positions.whose_turn
-                                    WHEN TRUE THEN initial_evals.evaluation - IFNULL(practice_evals.evaluation, resulting_evals.evaluation) -- WHITE
-                                    WHEN FALSE THEN IFNULL(practice_evals.evaluation, resulting_evals.evaluation) - initial_evals.evaluation -- BLACK
+                                 CASE basic_position_data.whose_turn
+                                    WHEN TRUE THEN initial_evals.combined_evaluation - IFNULL(practice_evals.combined_evaluation, resulting_evals.combined_evaluation) -- WHITE
+                                    WHEN FALSE THEN IFNULL(practice_evals.combined_evaluation, resulting_evals.combined_evaluation) - initial_evals.combined_evaluation -- BLACK
                                  END latest_practice_eval_loss,
-                                 positions.frequency as frequency,
-                                 last_seen.timestamp as last_seen_in_real_game,
-                                 JULIANDAY("NOW") - JULIANDAY(last_seen.timestamp) as days_since_last_seen,
-                                 IFNULL(last_practice.timestamp, last_seen.timestamp) as last_practiced_timestamp,
-                                 JULIANDAY("NOW") - IFNULL(JULIANDAY(last_practice.timestamp), JULIANDAY(last_seen.timestamp)) as days_since_last_practiced
+                                 positions.times_seen as times_seen_in_real_games,
+                                 positions.latest_timestamp as last_seen_in_real_game,
+                                 JULIANDAY("NOW") - JULIANDAY(positions.latest_timestamp) as days_since_last_seen,
+                                 IFNULL(last_practice.timestamp, positions.latest_timestamp) as last_practiced_timestamp,
+                                 JULIANDAY("NOW") - IFNULL(JULIANDAY(last_practice.timestamp), JULIANDAY(positions.latest_timestamp)) as days_since_last_practiced
                              FROM latest_real_move_attempts
                              INNER JOIN combined_engine_evaluation initial_evals ON latest_real_move_attempts.position = initial_evals.position
                              INNER JOIN combined_engine_evaluation resulting_evals ON latest_real_move_attempts.resulting_position = resulting_evals.position
-                             INNER JOIN summarised_positions positions ON latest_real_move_attempts.position = positions.position
-                             INNER JOIN latest_time_position_seen_in_game last_seen ON latest_real_move_attempts.position = last_seen.position
-                             LEFT JOIN latest_practice_move_attempts last_practice ON latest_real_move_attempts.position = last_practice.position
-                             LEFT JOIN combined_engine_evaluation practice_evals ON last_practice.resulting_position = practice_evals.position
-                             WHERE positions.is_users_turn = 1
+                             INNER JOIN combined_engine_evaluation practice_evals ON last_practice.resulting_position = practice_evals.position
+                             INNER JOIN summarised_positions_seen_in_games positions ON latest_real_move_attempts.position = positions.position
+                             INNER JOIN positions_metadata basic_position_data ON basic_position_data.position = latest_real_move_attempts.position
+                             INNER JOIN latest_move_attempts last_practice ON latest_real_move_attempts.position = last_practice.position
                              """)
         
         self.con.execute(f"""CREATE TEMP VIEW move_attempt_analysis AS
                              SELECT
                                 *,
-                                (latest_real_eval_loss + latest_practice_eval_loss) * frequency * days_since_last_practiced / days_since_last_seen AS priority
+                                (latest_real_eval_loss + latest_practice_eval_loss) * times_seen_in_real_games * days_since_last_practiced / days_since_last_seen AS priority
                              FROM move_attempt_analysis_stage_0
                              ORDER BY priority DESC""")
 
@@ -254,6 +353,8 @@ class Database:
             PRIMARY KEY (fen, source, band)
         )""")
 
+        self.con.commit()
+
     def value_exists(self, table, column, value) -> bool:
         """Check if a single value exists within a column."""
         return bool(self.con.execute(f"""SELECT EXISTS (SELECT 1 
@@ -262,9 +363,9 @@ class Database:
                                                         LIMIT 1)""", (value, )).fetchone()[0])
 
     def position_last_played(self, position: str):
-        result = self.con.execute(f"SELECT timestamp FROM latest_time_position_seen_in_game WHERE position = '{position}'").fetchone()
+        result = self.con.execute(f"SELECT latest_timestamp FROM summarised_positions_seen_in_games WHERE position = '{position}'").fetchone()
         if result is not None:
-            return dict(result)["timestamp"]
+            return dict(result)["latest_timestamp"]
         else:
             return None
     
@@ -275,7 +376,7 @@ class Database:
 
         position_saved_places = {
             "positions": ["position"],
-            "combined_evaluations": ["position"],
+            "combined_engine_evaluation": ["position"],
             "stockfish_evaluations": ["position"],
             "leela_evaluations": ["position"],
             "positions_seen_in_games": ["position"],
@@ -375,7 +476,7 @@ class Database:
                           depth_value: int, 
                           multipv: int = 1, 
                           commit: bool = True,
-                          exact_requirements: bool = False):
+                          exact_requirements: bool = False) -> float:
         position = board_position(board)
 
         if exact_requirements:
@@ -400,14 +501,17 @@ class Database:
         if result is None:
             return None
         
-        basic_result = (result[0]["score"], result[0]["pv"][0])  # Simplify to evaluation, best_move
+        if type(result) == int:
+            basic_result = (result, None)
+        else:
+            basic_result = (result[0]["score"], board.san(result[0]["pv"][0]))  # Simplify to evaluation, best_move
 
         self.con.execute(f"""INSERT INTO {engine.evaluations_table} (position,{engine.depth_parameter},evaluation,best_move) VALUES(?,?,?,?)""",
                          (
                             board_position(board),
                             depth_value,
                             basic_result[0],
-                            board.san(basic_result[1])
+                            basic_result[1]
                          ))
         if commit:
             self.con.commit()
@@ -417,7 +521,8 @@ class Database:
     def log_human_move(self, 
                        board: chess.Board, 
                        timestamp: datetime.datetime, 
-                       player: str, move: chess.Move, 
+                       player: str, 
+                       move: chess.Move, 
                        is_real: bool, 
                        time_control: str = None,
                        commit: bool = True):
@@ -495,7 +600,7 @@ class Database:
                 next_game_node = current_game_node.next()
                 continue
 
-            if current_game_node.turn == chess.WHITE:
+            if current_game_node.turn() == chess.WHITE:
                 this_player = game.headers["White"]
             else:
                 this_player = game.headers["Black"]
@@ -541,7 +646,7 @@ class Database:
         def print_info(table):
             logging.info(f"{self.con.execute(f'SELECT COUNT(*) FROM {table}').fetchone()} rows in {table}")
         
-        for i in ["games", "positions", "combined_evaluations", "stockfish_evaluations", "leela_evaluations", "positions_seen_in_games", "move_attempts", "fens", "fen_stats"]:
+        for i in ["games", "positions", "combined_engine_evaluation", "stockfish_evaluations", "leela_evaluations", "positions_seen_in_games", "move_attempts", "fens", "fen_stats"]:
             print_info(i)
 
         print(f"{len(self.all_positions())} total positions.")
