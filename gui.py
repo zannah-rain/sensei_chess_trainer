@@ -191,7 +191,9 @@ class EasyChessGui:
         return self.database.engine_evaluation(board=self.board, engine=self.leela(), depth_value=nodes)
     
     def combined_evaluation(self, depth, nodes):
-        return (self.stockfish_evaluation(depth) + self.leela_evaluation(nodes)) / 2
+        self.stockfish_evaluation(depth)
+        self.leela_evaluation(nodes)
+        return self.database.read_combined_engine_evaluation(board=self.board)
     
     @game_node.setter
     def game_node(self, value: chess.pgn.GameNode):
@@ -710,8 +712,10 @@ class EasyChessGui:
                             def puzzle_success():
                                 playsound.playsound("sounds//success-1-6297.mp3", block=False)
 
+                            self.play_move(move=window_read_result)
+
                             new_eval = self.combined_evaluation(depth=10, nodes=100)
-                            if self.board.turn == chess.WHITE:
+                            if self.current_puzzle.whose_turn == chess.WHITE:
                                 if (new_eval > self.current_puzzle.latest_real_eval) and (new_eval >= self.current_puzzle.latest_practice_eval):
                                     puzzle_success()
                                 else:
@@ -721,8 +725,10 @@ class EasyChessGui:
                                     puzzle_success()
                                 else:
                                     puzzle_fail()
+                        else:
+                            self.play_move(move=window_read_result)
+
                         self.puzzle_attempt += 1
-                        self.play_move(move=window_read_result)
                     else:
                         raise NotImplementedError()
                 else:
