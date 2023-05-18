@@ -699,7 +699,8 @@ class EasyChessGui:
                 # Apply the move logic
                 if self.current_puzzle is not None:
                     if self.position == self.current_puzzle.position:
-                        if self.puzzle_attempt == 0:
+                        self.puzzle_attempt += 1
+                        if self.puzzle_attempt == 1:
                             # Log the first attempt in the database
                             self.database.log_human_move(board=self.board, 
                                                          timestamp=datetime.datetime.now(), 
@@ -727,16 +728,15 @@ class EasyChessGui:
                                     puzzle_fail()
                         else:
                             self.play_move(move=window_read_result)
-
-                        self.puzzle_attempt += 1
                     else:
-                        raise NotImplementedError()
+                        self.puzzle_attempt += 1
+                        self.play_move(move=window_read_result)
                 else:
                     self.play_move(move=window_read_result)
                 continue
 
             if button == "Engine Move":
-                self.play_move(self.zpos.best_engine_move(engine=self.stockfish(), depth=20))
+                self.play_move(self.database.engine_move(board=self.board, engine=self.stockfish(), depth_value=20, multipv=1))
                 continue
 
             if button == "Open .pgn":
