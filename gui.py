@@ -736,6 +736,7 @@ class EasyChessGui:
                 continue
 
             if button == "Engine Move":
+                self.puzzle_attempt += 1
                 self.play_move(self.database.engine_move(board=self.board, engine=self.stockfish(), depth_value=20, multipv=1))
                 continue
 
