@@ -476,6 +476,55 @@ class Database:
 
         return dict(self.con.execute(f"""SELECT combined_evaluation FROM combined_engine_evaluation WHERE position='{position}'""").fetchone())["combined_evaluation"]
 
+    def engine_move(self, 
+                    board: chess.Board, 
+                    engine: Engine, 
+                    depth_value: int, 
+                    multipv: int = 1, 
+                    commit: bool = True,
+                    exact_requirements: bool = False) -> float:
+        position = board_position(board)
+
+        if exact_requirements:
+            comparator = "="
+        else:
+            comparator = ">="
+
+        if bool(self.con.execute(f"""SELECT EXISTS (SELECT 1 
+                                                    FROM {engine.evaluations_table} 
+                                                    WHERE position='{position}'
+                                                    AND {engine.depth_parameter}{comparator}{depth_value}
+                                                    LIMIT 1)""").fetchone()[0]):
+            san_move =  self.con.execute(f"""SELECT best_move
+                                             FROM {engine.evaluations_table}
+                                             WHERE position='{position}'
+                                             AND {engine.depth_parameter}{comparator}{depth_value}
+                                             ORDER BY {engine.depth_parameter} DESC
+                                             LIMIT 1""").fetchone()[0]
+            return board.parse_san(san_move)
+        
+        result = engine.evaluate_board(board=board, depth_value=depth_value)
+
+        if result is None:
+            return None
+        
+        if type(result) == int:
+            basic_result = (result, None)
+        else:
+            basic_result = (result[0]["score"], board.san(result[0]["pv"][0]))  # Simplify to evaluation, best_move
+
+        self.con.execute(f"""INSERT INTO {engine.evaluations_table} (position,{engine.depth_parameter},evaluation,best_move) VALUES(?,?,?,?)""",
+                         (
+                            board_position(board),
+                            depth_value,
+                            basic_result[0],
+                            basic_result[1]
+                         ))
+        if commit:
+            self.con.commit()
+
+        return result[0]["pv"][0]
+
     def engine_evaluation(self, 
                           board: chess.Board, 
                           engine: Engine, 
