@@ -469,6 +469,12 @@ class Database:
                 self.con.commit()
         
         self.con.commit()
+    
+    def read_combined_engine_evaluation(self,
+                                        board: chess.Board) -> float:
+        position = board_position(board)
+
+        return dict(self.con.execute(f"""SELECT combined_evaluation FROM combined_engine_evaluation WHERE position='{position}'""").fetchone())["combined_evaluation"]
 
     def engine_evaluation(self, 
                           board: chess.Board, 
