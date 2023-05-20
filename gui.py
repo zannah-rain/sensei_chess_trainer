@@ -76,7 +76,7 @@ MAX_DEPTH = 1000
 
 
 menu_def_neutral = [
-        ["File", ["Open .pgn", "Download .pgn's", "Build puzzles"]],
+        ["File", ["Open .pgn", "Download all lichess .pgn's", "Download 1 lichess .pgn", "Build puzzles"]],
         ['Boar&d', ['Flip', 'Color', ['Brown::board_color_k',
                                       'Blue::board_color_k',
                                       'Green::board_color_k',
@@ -756,13 +756,20 @@ class EasyChessGui:
                 # Randomise perspective to hopefully help learning
                 self.board_perspective = random.choice([chess.WHITE, chess.BLACK]) # self.current_puzzle.whose_turn
                 self.game = chess.pgn.Game().from_board(chess.Board(fen=position_to_fen(self.current_puzzle.position)))
+                continue
 
-            if button == "Download .pgn's":
+            if button == "Download all lichess .pgn's":
                 self.database.download_latest_games()
+                continue
+
+            if button == "Download 1 lichess .pgn":
+                self.database.download_latest_games(max_new_games=1)
+                continue
 
             if button == "Build puzzles":
                 self.database.full_engine_evaluation(engine=self.stockfish(), depth_value=10)
                 self.database.full_engine_evaluation(engine=self.leela(), depth_value=100)
+                continue
 
             if button == "->":
                 next_node = self.game_node.next()
