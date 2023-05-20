@@ -10,6 +10,7 @@ import logging
 from globals import username
 from zPosition import zPosition
 from typing import Tuple
+from requests.exceptions import ChunkedEncodingError
 
 # Tables:
 
@@ -673,21 +674,28 @@ class Database:
 
         return True
     
-    def download_latest_games(self):
+    def download_latest_games(self, max_new_games: int = None):
         new_pgns = lichess_client.games.export_by_player(username=username,
                                                          as_pgn=True,
                                                          since=self.latest_game_timestamp,
                                                          rated=True,
-                                                         finished=True)
+                                                         finished=True,
+                                                         sort="dateAsc")
         
         games_added = 0
-        for i in new_pgns:
-            this_new_game = chess.pgn.read_game(StringIO(i))
-            success = self.add_game(this_new_game)
-            if success:
-                games_added += 1
-            else:
-                break
+        try:
+            for i in new_pgns:
+                this_new_game = chess.pgn.read_game(StringIO(i))
+                success = self.add_game(this_new_game)
+                if success:
+                    games_added += 1
+                    if max_new_games is not None:
+                        if games_added >= max_new_games:
+                            break
+                else:
+                    continue
+        except ChunkedEncodingError:
+            logging.info("Connection broken by host (ChunkedEncodingError)")
 
         if games_added > 0:
             self.con.commit()
