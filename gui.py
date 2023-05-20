@@ -61,6 +61,7 @@ from globals import username
 import datetime
 import playsound
 import random
+import pandas as pd
 
 logging.basicConfig(level=logging.INFO)
 
@@ -84,6 +85,7 @@ menu_def_neutral = [
                     'Theme', GUI_THEME
                    ]
         ],
+        ["Data", ["Time Controls"]],
         ['&Time', ['User::tc_k', 'Engine::tc_k']],
         ['&Settings', ['Game::settings_game_k']],
         ['&Help', ['About']],
@@ -269,7 +271,7 @@ class EasyChessGui:
 
     @property
     def position(self) -> str:
-        return board_position(self.board)
+        return board_position(board=self.board)
     
     @property
     def board(self) -> chess.Board:
@@ -295,17 +297,25 @@ class EasyChessGui:
         return self._board_perspective
     
     @board_perspective.setter
-    def board_perspective(self, value):
+    def board_perspective(self, value: bool) -> None:
         if value != self._board_perspective:
             # Flip da board!
-            self._board_perspective = value
+            self._board_perspective: bool = value
             self.create_new_window()
             self.game_node = self.game_node
 
-    
     def flip_board(self) -> None:
         """Flips the perspective"""
         self.board_perspective = not self.board_perspective
+
+    def popup_display_table(self, popup_title: str, data: pd.DataFrame) -> None:
+        """Display a table of data in a pop up window"""
+
+        popup_layout = [[sg.Table(values=data.values.tolist(), headings=data.columns.tolist())],
+                               [sg.Ok()]]
+
+        popup_window = sg.Window(title=popup_title,
+                                                                layout=popup_layout).read(close=True)
 
     def create_new_window(self) -> sg.Window:
         """ Close the window param just before turning the new window """
@@ -796,6 +806,11 @@ class EasyChessGui:
                 self.database.full_engine_evaluation(engine=self.stockfish(), depth_value=10)
                 self.database.full_engine_evaluation(engine=self.leela(), depth_value=100)
                 continue
+
+            if button == "Time Controls":
+                self.popup_display_table(popup_title="Time Control Data",
+                                         data=pd.DataFrame(self.database.con.execute("SELECT time_control, total_games, average_n_moves, average_total_time_seconds, average_seconds_per_move FROM time_controls_summary").fetchall(),
+                                                           columns=["time_control", "total_games", "average_n_moves", "average_total_time_seconds", "average_seconds_per_move"]).sort_values("total_games", ascending=False))
 
             if button == "->":
                 next_node = self.game_node.next()
