@@ -200,6 +200,49 @@ class Database:
                                 LIMIT 1;
                             END
                             """)
+        
+    def initialise_time_control_tables(self):
+        self.con.execute("""CREATE TABLE IF NOT EXISTS time_controls (
+            time_control TEXT NOT NULL PRIMARY KEY,
+            bank_seconds INTEGER AS (substr(time_control, 0, instr(time_control, '+'))) STORED NOT NULL,
+            increment_seconds INTEGER AS (substr(time_control, instr(time_control, '+') + 1)) STORED NOT NULL
+        )""")
+        self.con.execute(f"""CREATE TRIGGER IF NOT EXISTS time_control_adder
+                             BEFORE INSERT ON games
+                             WHEN NOT EXISTS (SELECT 1 FROM time_controls WHERE NEW.time_control=time_controls.time_control)
+                             BEGIN
+                                 INSERT INTO time_controls
+                                 (time_control)
+                                 VALUES(IFNULL(NEW.time_control, "-"));
+                             END
+                             """)
+
+        self.con.execute("""CREATE TABLE IF NOT EXISTS time_controls_summary (
+            time_control TEXT NOT NULL PRIMARY KEY,
+            bank_seconds INTEGER NOT NULL,
+            increment_seconds INTEGER NOT NULL,
+            total_games INTEGER NOT NULL,
+            total_moves REAL NOT NULL,  -- A half move is .5
+            average_n_moves REAL AS (IFNULL(total_moves / total_games, 0)) STORED NOT NULL,
+            average_total_time_seconds REAL AS (IFNULL(bank_seconds + (increment_seconds * (total_moves / total_games)), 0)) STORED NOT NULL,
+            average_seconds_per_move REAL AS (IFNULL(increment_seconds + (bank_seconds * total_moves / total_games), 0)) STORED NOT NULL
+        )""")
+        self.con.execute("""CREATE TRIGGER IF NOT EXISTS time_control_summary_row_initialiser
+                            AFTER INSERT ON time_controls
+                            WHEN NOT EXISTS (SELECT 1 FROM time_controls_summary WHERE time_control=NEW.time_control)
+                            BEGIN
+                                INSERT INTO time_controls_summary
+                                (time_control, bank_seconds, increment_seconds, total_games, total_moves)
+                                VALUES(NEW.time_control, NEW.bank_seconds, NEW.increment_seconds, 0, 0);
+                            END""")
+        self.con.execute(f"""CREATE TRIGGER IF NOT EXISTS time_control_summariser
+                             AFTER INSERT ON games
+                             BEGIN
+                                UPDATE OR FAIL time_controls_summary
+                                SET total_games = total_games + 1,
+                                    total_moves = total_moves + (NEW.length / 2)
+                                WHERE time_control = NEW.time_control;
+                             END""")
     
     def initialise_move_attempts_tables(self):
         # One to many table tracking which moves have been played in each position
@@ -214,6 +257,7 @@ class Database:
             move TEXT NOT NULL,
             real_or_practice INTEGER NOT NULL,
             time_control TEXT,
+            time_taken_seconds REAL,
             PRIMARY KEY (position, timestamp, player, real_or_practice)
         )""")
 
@@ -222,20 +266,22 @@ class Database:
             resulting_position TEXT NOT NULL,
             timestamp TIMESTAMP NOT NULL,
             move TEXT NOT NULL,
-            time_control TEXT NOT NULL
+            time_control TEXT NOT NULL,
+            time_taken_seconds REAL
         )""")
         self.con.execute(f"""CREATE TRIGGER IF NOT EXISTS latest_real_move_attempts_updater
                              AFTER INSERT ON move_attempts
                              WHEN NEW.player='{username}' AND NEW.real_or_practice=1
                              BEGIN
                                  INSERT OR REPLACE INTO latest_real_move_attempts
-                                 (position, resulting_position, timestamp, move, time_control)
+                                 (position, resulting_position, timestamp, move, time_control, time_taken_seconds)
                                  SELECT
                                      position,
                                      resulting_position,
                                      timestamp,
                                      move,
-                                     time_control
+                                     time_control,
+                                     time_taken_seconds
                                  FROM move_attempts
                                  WHERE position=NEW.position
                                  AND player='{username}'
@@ -250,19 +296,21 @@ class Database:
             position TEXT NOT NULL PRIMARY KEY,
             resulting_position TEXT NOT NULL,
             timestamp TIMESTAMP NOT NULL,
-            move TEXT NOT NULL
+            move TEXT NOT NULL,
+            time_taken_seconds REAL
         )""")
         self.con.execute(f"""CREATE TRIGGER IF NOT EXISTS latest_move_attempts_updater
                              AFTER INSERT ON move_attempts
                              WHEN NEW.player='{username}'
                              BEGIN
                                  INSERT OR REPLACE INTO latest_move_attempts
-                                 (position, resulting_position, timestamp, move)
+                                 (position, resulting_position, timestamp, move, time_taken_seconds)
                                  SELECT
                                      position,
                                      resulting_position,
                                      timestamp,
-                                     move
+                                     move,
+                                     time_taken_seconds
                                  FROM move_attempts
                                  WHERE position=NEW.position
                                  AND player='{username}'
@@ -292,6 +340,8 @@ class Database:
 
         self.initialise_move_attempts_tables()
 
+        self.initialise_time_control_tables()
+
         self.con.execute(f"""CREATE TEMP VIEW move_attempt_analysis_stage_0 AS 
                              SELECT 
                                  latest_real_move_attempts.position AS position,
@@ -314,7 +364,9 @@ class Database:
                                  positions.latest_timestamp as last_seen_in_real_game,
                                  JULIANDAY("NOW") - JULIANDAY(positions.latest_timestamp) as days_since_last_seen,
                                  IFNULL(last_practice.timestamp, positions.latest_timestamp) as last_practiced_timestamp,
-                                 JULIANDAY("NOW") - IFNULL(JULIANDAY(last_practice.timestamp), JULIANDAY(positions.latest_timestamp)) as days_since_last_practiced
+                                 JULIANDAY("NOW") - IFNULL(JULIANDAY(last_practice.timestamp), JULIANDAY(positions.latest_timestamp)) as days_since_last_practiced,
+                                 IFNULL(latest_real_move_attempts.time_taken_seconds, IFNULL(time_controls_summary.average_seconds_per_move, 30)) AS latest_real_time_taken_seconds,
+                                 IFNULL(last_practice.time_taken_seconds, IFNULL(time_controls_summary.average_seconds_per_move, 30)) AS latest_practice_time_taken_seconds
                              FROM latest_real_move_attempts
                              INNER JOIN combined_engine_evaluation initial_evals ON latest_real_move_attempts.position = initial_evals.position
                              INNER JOIN combined_engine_evaluation resulting_evals ON latest_real_move_attempts.resulting_position = resulting_evals.position
@@ -322,12 +374,13 @@ class Database:
                              INNER JOIN summarised_positions_seen_in_games positions ON latest_real_move_attempts.position = positions.position
                              INNER JOIN positions_metadata basic_position_data ON basic_position_data.position = latest_real_move_attempts.position
                              INNER JOIN latest_move_attempts last_practice ON latest_real_move_attempts.position = last_practice.position
+                             LEFT JOIN time_controls_summary ON latest_real_move_attempts.time_control = time_controls_summary.time_control
                              """)
         
         self.con.execute(f"""CREATE TEMP VIEW move_attempt_analysis AS
                              SELECT
                                 *,
-                                (latest_real_eval_loss + latest_practice_eval_loss) * times_seen_in_real_games * days_since_last_practiced / days_since_last_seen AS priority
+                                (latest_real_eval_loss + latest_practice_eval_loss) * (latest_real_time_taken_seconds + latest_practice_time_taken_seconds) * times_seen_in_real_games * days_since_last_practiced / days_since_last_seen AS priority
                              FROM move_attempt_analysis_stage_0
                              ORDER BY priority DESC""")
 
@@ -581,27 +634,30 @@ class Database:
                        move: chess.Move, 
                        is_real: bool, 
                        time_control: str = None,
+                       time_taken_seconds: float = None,
                        commit: bool = True):
         """Should be called ONCE for each attempted human move for each position, real or practice game, user or opponent."""
         assert isinstance(timestamp, datetime.datetime)
+        assert (time_control is not None) or (time_taken_seconds is not None)
 
-        position = fen_to_position(board.fen())
-        move_string = board.san(move)
+        position: str = fen_to_position(board.fen())
+        move_string: str = board.san(move)
 
-        resulting_position = board.copy()
+        resulting_position: chess.Board = board.copy()
         resulting_position.push(move)
-        resulting_position = fen_to_position(resulting_position.fen())
+        resulting_position = fen_to_position(fen=resulting_position.fen())
 
-        self.con.execute("""INSERT INTO move_attempts (position, timestamp, player, move, resulting_position, real_or_practice, time_control) VALUES(?,?,?,?,?,?,?)""",
-                          (
-                            position,
-                            timestamp.strftime("%Y-%m-%d %H:%M:%S"),
-                            player,
-                            move_string,
-                            resulting_position,
-                            is_real,
-                            time_control
-                          ))
+        self.con.execute("""INSERT INTO move_attempts (position, timestamp, player, move, resulting_position, real_or_practice, time_control, time_taken_seconds) VALUES(?,?,?,?,?,?,?,?)""",
+                         (
+                             position,
+                             timestamp.strftime("%Y-%m-%d %H:%M:%S"),
+                             player,
+                             move_string,
+                             resulting_position,
+                             is_real,
+                             time_control,
+                             time_taken_seconds
+                         ))
         
         if commit:
             self.con.commit()
@@ -629,21 +685,23 @@ class Database:
         Note: Does not commit to allow for faster batching.
         """
         timestamp = f"{game.headers['UTCDate']} {game.headers['UTCTime']}".replace(".", "-")
+        game_name: str = f"{game.headers['White']} vs {game.headers['Black']} ({game.headers['UTCDate']})"
 
-        try:
-            self.con.execute("INSERT INTO games (white,black,event,link,timestamp,result,time_control,variant,pgn,length) VALUES(?,?,?,?,?,?,?,?,?,?)",
-                             (game.headers["White"],
-                              game.headers["Black"],
-                              game.headers["Event"],
-                              game.headers["Site"],
-                              timestamp,
-                              game.headers["Result"],
-                              game.headers["TimeControl"],
-                              game.headers["Variant"],
-                              game.__str__(),
-                              len(list(game.mainline_moves()))))
-        except sqlite3.IntegrityError:
+        if self.con.execute(f"SELECT 1 FROM games WHERE white=? AND black=? AND timestamp=?", (game.headers["White"], game.headers["Black"], timestamp)).fetchone() is not None:
+            logging.info(f"Not adding game as already in database: {game_name}")
             return False
+
+        self.con.execute("INSERT INTO games (white,black,event,link,timestamp,result,time_control,variant,pgn,length) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                            (game.headers["White"],
+                            game.headers["Black"],
+                            game.headers["Event"],
+                            game.headers["Site"],
+                            timestamp,
+                            game.headers["Result"],
+                            game.headers["TimeControl"],
+                            game.headers["Variant"],
+                            game.__str__(),
+                            len(list(game.mainline_moves()))))
         
         positions_saved = set()  # Only save each position at most once as repeated positions don't deserve being overweighted that much
         current_game_node = game
@@ -670,7 +728,7 @@ class Database:
             current_position = gamenode_position(current_game_node)
             next_game_node = current_game_node.next()
         
-        logging.info(f"Added game to db: {game.headers['White']} vs {game.headers['Black']} ({game.headers['UTCDate']})")
+        logging.info(f"Added game to db: {game_name}")
 
         return True
     

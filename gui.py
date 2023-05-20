@@ -123,9 +123,12 @@ class EasyChessGui:
         self.text_output_puzzle_latest_attempt_move = None
         self.text_output_puzzle_latest_attempt_evaluation = None
         self.text_output_puzzle_latest_evaluation_loss = None
+        self.text_output_puzzle_real_time_control = None
+        self.text_output_puzzle_latest_time_taken = None
 
         # Puzzle stuff
-        self.current_puzzle: Puzzle = None
+        self._current_puzzle: Puzzle = None
+        self._current_puzzle_start_time: datetime.datetime = None
         """"""
         self.puzzle_attempt = 0
         """Tracks attempts at the current puzzle, at the moment only the first attempt is recorded."""
@@ -147,6 +150,21 @@ class EasyChessGui:
         # Tracking any short term variables in between window reads
         self.move_state = 0
         self.move_from = None
+
+    @property
+    def current_puzzle(self) -> Puzzle:
+        return self._current_puzzle
+    
+    @current_puzzle.setter
+    def current_puzzle(self, value: Puzzle):
+        self._current_puzzle = value
+        self._current_puzzle_start_time = datetime.datetime.now()
+        self.puzzle_attempt = 0
+
+    @property
+    def current_puzzle_start_time(self):
+        """The time the current puzzle was started"""
+        return self._current_puzzle_start_time
 
     def engines(self) -> Dict[str, Engine]:
         return {"stockfish": self.stockfish(), "leela": self.leela()}
@@ -233,15 +251,19 @@ class EasyChessGui:
             if self.puzzle_attempt == 0:
                 self.text_output_puzzle_latest_real_attempt_evaluation.update(f"Latest real game eval: -hidden-")
                 self.text_output_puzzle_latest_real_attempt_evaluation_loss.update(f"Latest real game eval loss: -hidden-")
+                self.text_output_puzzle_real_time_control.update(f"Latest real game time control: -hidden-")
                 self.text_output_puzzle_latest_attempt_move.update(f"Last try: -hidden-")
                 self.text_output_puzzle_latest_attempt_evaluation.update(f"Last eval: -hidden-")
                 self.text_output_puzzle_latest_evaluation_loss.update(f"Last eval loss: -hidden-")
+                self.text_output_puzzle_latest_time_taken.update(f"Last time taken: -hidden-")
             else:
                 self.text_output_puzzle_latest_real_attempt_evaluation.update(f"Latest real game eval: {self.current_puzzle.latest_real_eval}")
                 self.text_output_puzzle_latest_real_attempt_evaluation_loss.update(f"Latest real game eval loss: {self.current_puzzle.latest_real_eval_loss}")
+                self.text_output_puzzle_real_time_control.update(f"Latest real game time control: {self.current_puzzle.latest_time_control}")
                 self.text_output_puzzle_latest_attempt_move.update(f"Last try: {self.current_puzzle.latest_attempt_move}")
                 self.text_output_puzzle_latest_attempt_evaluation.update(f"Last eval: {self.current_puzzle.latest_practice_eval}")
                 self.text_output_puzzle_latest_evaluation_loss.update(f"Last eval loss: {self.current_puzzle.latest_practice_eval_loss}")
+                self.text_output_puzzle_latest_time_taken.update(f"Last time taken: {self.current_puzzle.latest_practice_time_taken_seconds}")
         else:
             self.text_output_puzzle_priority.update(f"No puzzle loaded.")
 
@@ -639,6 +661,8 @@ class EasyChessGui:
         self.text_output_puzzle_latest_attempt_move = sg.Text()
         self.text_output_puzzle_latest_attempt_evaluation = sg.Text()
         self.text_output_puzzle_latest_evaluation_loss = sg.Text()
+        self.text_output_puzzle_real_time_control = sg.Text()
+        self.text_output_puzzle_latest_time_taken = sg.Text()
 
         main_layout = [[sg.Frame("Position Info", [[self.text_output_board_date_seen],
                                                    [self.text_output_board_eval_stockfish],
@@ -646,6 +670,8 @@ class EasyChessGui:
         puzzle_layout = [[sg.Frame("Puzzle Info", [[self.text_output_puzzle_priority],
                                                    [self.text_output_puzzle_times_seen_in_real_games],
                                                    [self.text_output_puzzle_last_practiced_date],
+                                                   [self.text_output_puzzle_real_time_control],
+                                                   [self.text_output_puzzle_latest_time_taken],
                                                    [self.text_output_puzzle_latest_real_attempt_evaluation],
                                                    [self.text_output_puzzle_latest_real_attempt_evaluation_loss],
                                                    [self.text_output_puzzle_latest_attempt_move],
@@ -689,7 +715,7 @@ class EasyChessGui:
             button, value = window_read_result
 
             if button is None:
-                logging.info('Quit app from main loop, X is pressed.')
+                logging.info(msg='Quit app from main loop, X is pressed.')
                 quit()
                 break
 
@@ -707,16 +733,17 @@ class EasyChessGui:
                                                          timestamp=datetime.datetime.now(), 
                                                          player=username, 
                                                          move=window_read_result, 
-                                                         is_real=False)
+                                                         is_real=False,
+                                                         time_taken_seconds=(datetime.datetime.now() - self.current_puzzle_start_time).total_seconds())
                             
-                            def puzzle_fail():
-                                playsound.playsound("sounds//error-when-entering-the-game-menu-132111.mp3", block=False)
-                            def puzzle_success():
-                                playsound.playsound("sounds//success-1-6297.mp3", block=False)
+                            def puzzle_fail() -> None:
+                                playsound.playsound(sound="sounds//error-when-entering-the-game-menu-132111.mp3", block=False)
+                            def puzzle_success() -> None:
+                                playsound.playsound(sound="sounds//success-1-6297.mp3", block=False)
 
                             self.play_move(move=window_read_result)
 
-                            new_eval = self.combined_evaluation(depth=10, nodes=100)
+                            new_eval: float = self.combined_evaluation(depth=10, nodes=100)
 
                             # Want to move at least 5% towards the best move to consider myself 'improving' (otherwise 'success' can mean going from 99.9% loss to 99.8% when there's a way out)
                             if self.current_puzzle.whose_turn == chess.WHITE:
@@ -752,7 +779,6 @@ class EasyChessGui:
 
             if button == "Next Lesson":
                 self.current_puzzle = self.database.highest_priority_puzzle()
-                self.puzzle_attempt = 0
                 # Randomise perspective to hopefully help learning
                 self.board_perspective = random.choice([chess.WHITE, chess.BLACK]) # self.current_puzzle.whose_turn
                 self.game = chess.pgn.Game().from_board(chess.Board(fen=position_to_fen(self.current_puzzle.position)))

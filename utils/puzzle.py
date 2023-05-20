@@ -40,4 +40,6 @@ class Puzzle:
         """The days (decimal) since the position has been practiced last."""
         self.latest_practiced_timestamp = x["last_practiced_timestamp"]
         """When the position has last been practiced (or played in a real game)."""
+        self.latest_practice_time_taken_seconds = x["latest_practice_time_taken_seconds"]
+        """How many seconds the last practice attempt took (Or an extrapolated value from the original time control)"""
         
