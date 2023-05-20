@@ -62,6 +62,7 @@ import datetime
 import playsound
 import random
 import pandas as pd
+from utils.promotion_select_window import select_promotion_piece
 
 logging.basicConfig(level=logging.INFO)
 
@@ -85,7 +86,7 @@ menu_def_neutral = [
                     'Theme', GUI_THEME
                    ]
         ],
-        ["Data", ["Time Controls"]],
+        ["Data", ["Time Controls", "Games", "Stats"]],
         ['&Time', ['User::tc_k', 'Engine::tc_k']],
         ['&Settings', ['Game::settings_game_k']],
         ['&Help', ['About']],
@@ -488,7 +489,7 @@ class EasyChessGui:
         """
         # If this move is from a user, we will show a window with piece images
         if human:
-            psg_promo = self.select_promotion_piece(stm)
+            psg_promo = select_promotion_piece(stm)
 
             # If user pressed x we set the promo to queen
             if psg_promo is None:
@@ -811,6 +812,19 @@ class EasyChessGui:
                 self.popup_display_table(popup_title="Time Control Data",
                                          data=pd.DataFrame(self.database.con.execute("SELECT time_control, total_games, average_n_moves, average_total_time_seconds, average_seconds_per_move FROM time_controls_summary").fetchall(),
                                                            columns=["time_control", "total_games", "average_n_moves", "average_total_time_seconds", "average_seconds_per_move"]).sort_values("total_games", ascending=False))
+                continue
+
+            if button == "Games":
+                self.popup_display_table(popup_title="Games",
+                                         data=pd.DataFrame(data=self.database.con.execute("SELECT white, black, timestamp, link, result, time_control, variant, length FROM games").fetchall(),
+                                                           columns=["white", "black", "timestamp", "link", "result", "time_control", "variant", "length"]).sort_values(by="timestamp", ascending=False))
+                continue
+
+            if button == "Stats":
+                self.popup_display_table(popup_title="Stats",
+                                         data=pd.DataFrame(dict(self.database.con.execute("SELECT * FROM move_stats").fetchall()[0]), index=["Values"]).transpose().reset_index())
+                continue
+                
 
             if button == "->":
                 next_node = self.game_node.next()

@@ -1,10 +1,29 @@
 import copy
+from utils.constants import *
+import PySimpleGUI as sg
+import logging
+import sys
+
+platform = sys.platform
 
 white_init_promote_board = [[QUEENW, ROOKW, BISHOPW, KNIGHTW]]
 
 black_init_promote_board = [[QUEENB, ROOKB, BISHOPB, KNIGHTB]]
 
-def select_promotion_piece(self, stm):
+sq_light_color = '#F0D9B5'
+sq_dark_color = '#B58863'
+
+def render_square(image, key, location):
+        """ Returns an RButton (Read Button) with image image """
+        if (location[0] + location[1]) % 2:
+            color = sq_dark_color  # Dark square
+        else:
+            color = sq_light_color
+        return sg.RButton('', image_filename=image, size=(1, 1),
+                          border_width=0, button_color=('white', color),
+                          pad=(0, 0), key=key)
+
+def select_promotion_piece(stm):
     """
     Allow user to select a piece type to promote to.
 
@@ -21,12 +40,12 @@ def select_promotion_piece(self, stm):
     for i in range(1):
         for j in range(4):
             piece_image = images[psg_promote_board[i][j]]
-            row.append(self.render_square(piece_image, key=(i, j),
+            row.append(render_square(piece_image, key=(i, j),
                                             location=(i, j)))
 
         board_layout.append(row)
 
-    promo_window = sg.Window('{} {}'.format(APP_NAME, APP_VERSION),
+    promo_window = sg.Window('Promotion Select',
                                 board_layout,
                                 default_button_element_size=(12, 1),
                                 auto_size_buttons=False,

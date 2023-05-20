@@ -380,9 +380,103 @@ class Database:
         self.con.execute(f"""CREATE TEMP VIEW move_attempt_analysis AS
                              SELECT
                                 *,
-                                (latest_real_eval_loss + latest_practice_eval_loss) * (latest_real_time_taken_seconds + latest_practice_time_taken_seconds) * times_seen_in_real_games * days_since_last_practiced / days_since_last_seen AS priority
+                                (latest_real_eval_loss + latest_practice_eval_loss) * (MIN(latest_real_time_taken_seconds, 90) + MIN(latest_practice_time_taken_seconds, 90)) * times_seen_in_real_games * days_since_last_practiced / days_since_last_seen AS priority
                              FROM move_attempt_analysis_stage_0
                              ORDER BY priority DESC""")
+        
+        # Want to know:
+        # Stats about practice done today and this week
+        # Stats on games done today and this week
+        # Overall practice stats
+        # Overall game stats
+
+        self.con.execute(f"""
+        CREATE TEMP VIEW move_stats AS
+            WITH todays_practice_stats AS (
+                SELECT 
+                    1 AS indxx,
+                    COUNT(*) AS positions_practiced,
+                    AVG(latest_real_eval_loss) AS average_real_eval_loss,
+                    SUM(latest_real_eval_loss) AS sum_real_eval_loss,
+                    AVG(latest_practice_eval_loss) AS average_practice_eval_loss,
+                    SUM(latest_practice_eval_loss) AS sum_practice_eval_loss,
+                    SUM(times_seen_in_real_games) as times_practiced_positions_seen_in_real_games,
+                    AVG(latest_real_time_taken_seconds) AS average_time_per_move_real,
+                    AVG(latest_practice_time_taken_seconds) AS average_time_per_move_practice,
+                    SUM(priority) AS total_re_review_priority
+                FROM move_attempt_analysis
+                WHERE days_since_last_practiced <= 1
+                AND last_practiced_timestamp != last_seen_in_real_game
+            ),
+            todays_game_stats AS (
+                SELECT
+                    1 AS indxx,
+                    COUNT(*) AS games_played,
+                    AVG(length) AS average_half_moves,
+                    SUM(length) AS total_half_moves
+                FROM games
+                WHERE JULIANDAY("NOW") - JULIANDAY(timestamp) <= 1
+            ),
+            overall_practice_stats AS (
+                SELECT 
+                    1 AS indxx,
+                    COUNT(position) AS positions_practiced,
+                    AVG(latest_real_eval_loss) AS average_real_eval_loss,
+                    SUM(latest_real_eval_loss) AS sum_real_eval_loss,
+                    AVG(latest_practice_eval_loss) AS average_practice_eval_loss,
+                    SUM(latest_practice_eval_loss) AS sum_practice_eval_loss,
+                    SUM(times_seen_in_real_games) as times_practiced_positions_seen_in_real_games,
+                    AVG(latest_real_time_taken_seconds) AS average_time_per_move_real,
+                    AVG(latest_practice_time_taken_seconds) AS average_time_per_move_practice,
+                    SUM(priority) AS total_re_review_priority
+                FROM move_attempt_analysis
+                WHERE last_practiced_timestamp != last_seen_in_real_game
+            ),
+            overall_real_stats AS (
+                SELECT 
+                    1 AS indxx,
+                    COUNT(*) AS positions_played,
+                    AVG(latest_real_eval_loss) AS average_real_eval_loss,
+                    SUM(latest_real_eval_loss) AS sum_real_eval_loss,
+                    SUM(times_seen_in_real_games) as times_real_positions_seen_in_real_games,
+                    AVG(latest_real_time_taken_seconds) AS average_time_per_move_real,
+                    SUM(priority) AS total_review_priority
+                FROM move_attempt_analysis
+            )
+            SELECT
+                todays_practice_stats.positions_practiced AS positions_practiced_today,
+                todays_practice_stats.average_real_eval_loss AS average_real_eval_loss_today,
+                todays_practice_stats.sum_real_eval_loss AS sum_real_eval_loss_today,
+                todays_practice_stats.average_practice_eval_loss AS average_practice_eval_loss_today,
+                todays_practice_stats.sum_practice_eval_loss AS sum_practice_eval_loss_today,
+                todays_practice_stats.times_practiced_positions_seen_in_real_games AS times_todays_positions_seen_in_real_games,
+                todays_practice_stats.average_time_per_move_real AS average_real_time_per_move_today,
+                todays_practice_stats.average_time_per_move_practice AS average_practice_time_per_move_today,
+                todays_practice_stats.total_re_review_priority AS todays_total_re_review_priority,
+                todays_game_stats.games_played AS total_games_played_today,
+                todays_game_stats.average_half_moves AS average_half_moves_per_real_game_today,
+                todays_game_stats.total_half_moves AS total_half_moves_from_real_games_today,
+                overall_practice_stats.positions_practiced AS total_positions_practiced_alltime,
+                overall_practice_stats.average_real_eval_loss AS average_real_eval_loss_in_practiced_positions,
+                overall_practice_stats.sum_real_eval_loss AS total_real_eval_loss_in_practiced_positions,
+                overall_practice_stats.average_practice_eval_loss AS average_practice_eval_loss_alltime,
+                overall_practice_stats.sum_practice_eval_loss AS total_practice_eval_loss_alltime,
+                overall_practice_stats.times_practiced_positions_seen_in_real_games AS times_practiced_positions_seen_in_real_games,
+                overall_practice_stats.average_time_per_move_real AS average_real_time_per_move_in_practiced_positions,
+                overall_practice_stats.average_time_per_move_practice AS average_practice_time_per_move_in_practiced_positions,
+                overall_practice_stats.total_re_review_priority AS total_alltime_re_review_priority,
+                overall_real_stats.positions_played AS total_unique_real_positions_played_alltime,
+                overall_real_stats.average_real_eval_loss AS average_real_eval_loss_alltime,
+                overall_real_stats.sum_real_eval_loss AS total_real_eval_loss_alltime,
+                overall_real_stats.times_real_positions_seen_in_real_games AS total_real_positions_played_alltime,
+                overall_real_stats.average_time_per_move_real AS average_real_time_per_move_alltime,
+                overall_real_stats.total_review_priority AS total_review_priority
+            FROM 
+                todays_practice_stats
+                INNER JOIN todays_game_stats ON todays_practice_stats.indxx = todays_game_stats.indxx
+                INNER JOIN overall_practice_stats ON todays_practice_stats.indxx = overall_practice_stats.indxx
+                INNER JOIN overall_real_stats ON todays_practice_stats.indxx = overall_real_stats.indxx
+        """)
 
         # Tracking FEN level data
         # Mostly for a one to many table tracking which FEN's have led to any given position
