@@ -79,7 +79,7 @@ MAX_DEPTH = 1000
 
 menu_def_neutral = [
         ["File", ["Open .pgn", "Download all lichess .pgn's", "Download 1 lichess .pgn", "Build puzzles"]],
-        ['Boar&d', ['Flip', 'Color', ['Brown::board_color_k',
+        ['Boar&d', ['Flip', "Mirror", 'Color', ['Brown::board_color_k',
                                       'Blue::board_color_k',
                                       'Green::board_color_k',
                                       'Gray::board_color_k'],
@@ -101,6 +101,7 @@ class EasyChessGui:
         self._stockfish = None
         self._leela = None
         self._board_perspective = None
+        self._mirrored = False
 
         self.database = Database()
 
@@ -216,6 +217,14 @@ class EasyChessGui:
         self.leela_evaluation(nodes)
         return self.database.read_combined_engine_evaluation(board=self.board)
     
+    @property
+    def turn(self) -> bool:
+        return self.game_node.turn()  # Does NOT account for mirroring, this is the underlying value that can be fed to engines etc
+    
+    @property
+    def mirror_aware_turn(self) -> bool:
+        return (self.turn + self._mirrored) % 2
+    
     @game_node.setter
     def game_node(self, value: chess.pgn.GameNode):
         # Update Board
@@ -232,10 +241,12 @@ class EasyChessGui:
                 self.change_square_color(self.window, 7 - chess.square_rank(move.to_square), chess.square_file(move.to_square))
         
         # Update GUI
-        if self.game_node.turn() == chess.WHITE:
+        if self.mirror_aware_turn == chess.WHITE:
             turn_text = "White to play"
         else:
             turn_text = "Black to play"
+        if self.mirrored:
+            turn_text += " (Mirrored!?)"
         self.text_output_whose_turn.update(turn_text)
 
         last_seen = self.database.position_last_played(gamenode_position(value))
@@ -243,9 +254,15 @@ class EasyChessGui:
             self.text_output_board_date_seen.update(f"Position last played at {last_seen}")
         else:
             self.text_output_board_date_seen.update(f"Position not seen in a real game")
+
+        stockfish_eval = self.stockfish_evaluation(depth=10)
+        leela_eval = self.leela_evaluation(nodes=100)
+        if self.mirrored:
+            stockfish_eval = 1 - stockfish_eval
+            leela_eval = 1 - leela_eval
         
-        self.text_output_board_eval_stockfish.update(f"Stockfish evaluation: {self.stockfish_evaluation(depth=10)}")
-        self.text_output_board_eval_leela.update(f"Leela evaluation: {self.leela_evaluation(nodes=100)}")
+        self.text_output_board_eval_stockfish.update(f"Stockfish evaluation: {stockfish_eval}")
+        self.text_output_board_eval_leela.update(f"Leela evaluation: {stockfish_eval}")
              
         if self.current_puzzle is not None:
             self.text_output_puzzle_priority.update(f"Review Priority: {self.current_puzzle.priority}")
@@ -260,11 +277,16 @@ class EasyChessGui:
                 self.text_output_puzzle_latest_evaluation_loss.update(f"Last eval loss: -hidden-")
                 self.text_output_puzzle_latest_time_taken.update(f"Last time taken: -hidden-")
             else:
-                self.text_output_puzzle_latest_real_attempt_evaluation.update(f"Latest real game eval: {self.current_puzzle.latest_real_eval}")
+                latest_real_eval = self.current_puzzle.latest_real_eval
+                last_practice_eval = self.current_puzzle.latest_practice_eval
+                if self.mirrored:
+                    latest_real_eval = 1 - latest_real_eval
+                    last_practice_eval = 1 - last_practice_eval
+                self.text_output_puzzle_latest_real_attempt_evaluation.update(f"Latest real game eval: {latest_real_eval}")
                 self.text_output_puzzle_latest_real_attempt_evaluation_loss.update(f"Latest real game eval loss: {self.current_puzzle.latest_real_eval_loss}")
                 self.text_output_puzzle_real_time_control.update(f"Latest real game time control: {self.current_puzzle.latest_time_control}")
                 self.text_output_puzzle_latest_attempt_move.update(f"Last try: {self.current_puzzle.latest_attempt_move}")
-                self.text_output_puzzle_latest_attempt_evaluation.update(f"Last eval: {self.current_puzzle.latest_practice_eval}")
+                self.text_output_puzzle_latest_attempt_evaluation.update(f"Last eval: {last_practice_eval}")
                 self.text_output_puzzle_latest_evaluation_loss.update(f"Last eval loss: {self.current_puzzle.latest_practice_eval_loss}")
                 self.text_output_puzzle_latest_time_taken.update(f"Last time taken: {self.current_puzzle.latest_practice_time_taken_seconds}")
         else:
@@ -293,6 +315,19 @@ class EasyChessGui:
         return self.board.fen()
     
     @property
+    def mirrored(self) -> bool:
+        """Whether the colours have been swapped in displays without changing them in the back end stuff."""
+        return self._mirrored
+    
+    @mirrored.setter
+    def mirrored(self, value) -> None:
+        if value != self.mirrored:
+            logging.info(f"Setting .mirrored to {value}")
+            self._mirrored = value
+            self.create_new_window()
+            self.game_node = self.game_node
+    
+    @property
     def board_perspective(self) -> bool:
         """chess.WHITE (1) or chess.BLACK (0). Determines the perspective the board is drawn from, independently from whos turn it is."""
         return self._board_perspective
@@ -306,8 +341,24 @@ class EasyChessGui:
             self.game_node = self.game_node
 
     def flip_board(self) -> None:
-        """Flips the perspective"""
+        """Flips the perspective (NOT THE COLOURS!)"""
         self.board_perspective = not self.board_perspective
+
+    def randomise_perspective_and_mirroring(self) -> None:
+        new_perspective: bool = random.choice([chess.WHITE, chess.BLACK])
+        new_mirroring: bool = random.choice([True, False])
+
+        if new_perspective != self.board_perspective:
+            if new_mirroring != self.mirrored:
+                self._board_perspective = new_perspective
+                self._mirrored = new_mirroring
+                self.create_new_window()
+                self.game_node = self.game_node
+            else:
+                self.board_perspective = new_perspective
+        else:
+            self.mirrored = new_mirroring
+
 
     def popup_display_table(self, popup_title: str, data: pd.DataFrame) -> None:
         """Display a table of data in a pop up window"""
@@ -354,9 +405,9 @@ class EasyChessGui:
         psgboard = []
 
         # Get piece locations only to build psg board
-        pc_locations = self.fen.split()[0]
+        pc_locations: str = self.fen.split()[0]
 
-        board = chess.BaseBoard(pc_locations)
+        board = chess.BaseBoard(board_fen=pc_locations)
         old_r = None
 
         for s in chess.SQUARES:
@@ -378,7 +429,7 @@ class EasyChessGui:
 
             if pc is not None:
                 pt = pc.piece_type
-                c = pc.color
+                c = (pc.color + self.mirrored) % 2
                 if c:
                     if pt == chess.PAWN:
                         piece_r.append(PAWNW)
@@ -419,7 +470,7 @@ class EasyChessGui:
         Change the color of a square based on square row and col.
         """
         btn_sq = window.find_element(key=(row, col))
-        is_dark_square = True if (row + col) % 2 else False
+        is_dark_square = True if (row + col + self.mirrored) % 2 else False
         bd_sq_color = self.move_sq_dark_color if is_dark_square else \
                       self.move_sq_light_color
         btn_sq.Update(button_color=('white', bd_sq_color))
@@ -461,7 +512,7 @@ class EasyChessGui:
         """
         for i in range(8):
             for j in range(8):
-                color = self.sq_dark_color if (i + j) % 2 else \
+                color = self.sq_dark_color if (i + j + self.mirrored) % 2 else \
                         self.sq_light_color
                 piece_image = images[self.psg_board[i][j]]
                 elem = self.window.find_element(key=(i, j))
@@ -470,7 +521,7 @@ class EasyChessGui:
 
     def render_square(self, image, key, location):
         """ Returns an RButton (Read Button) with image image """
-        if (location[0] + location[1]) % 2:
+        if (location[0] + location[1] + self.mirrored) % 2:
             color = self.sq_dark_color  # Dark square
         else:
             color = self.sq_light_color
@@ -551,7 +602,7 @@ class EasyChessGui:
                 # If move is cancelled, pressing same button twice
                 if move_to == self.move_from:
                     # Restore the color of the pressed board square
-                    color = self.sq_dark_color if (to_row + to_col) % 2 else self.sq_light_color
+                    color = self.sq_dark_color if (to_row + to_col + self.mirrored) % 2 else self.sq_light_color
 
                     # Restore the color of the fr square
                     button_square.Update(button_color=('white', color))
@@ -569,8 +620,8 @@ class EasyChessGui:
                 to_sq = chess.square(to_col, 7-to_row)
 
                 # If user move is a promote
-                if self.relative_row(to_sq, self.board.turn) == RANK_8 and moved_piece == chess.PAWN:
-                    pyc_promo, psg_promo = self.get_promo_piece(user_move, self.board.turn, True)
+                if self.relative_row(s=to_sq, stm=self.board.turn) == RANK_8 and moved_piece == chess.PAWN:
+                    pyc_promo, psg_promo = self.get_promo_piece(move=user_move, stm=self.board.turn, human=True)
                     user_move = chess.Move(fr_sq, to_sq, promotion=pyc_promo)
                 else:
                     user_move = chess.Move(fr_sq, to_sq)
@@ -586,7 +637,7 @@ class EasyChessGui:
                 else:
                     self.move_state = 0
                     color = self.sq_dark_color \
-                        if (self.move_from[0] + self.move_from[1]) % 2 else self.sq_light_color
+                        if (self.move_from[0] + self.move_from[1] + self.mirrored) % 2 else self.sq_light_color
 
                     # Restore the color of the fr square
                     button_square.Update(button_color=('white', color))
@@ -791,7 +842,7 @@ class EasyChessGui:
             if button == "Next Lesson":
                 self.current_puzzle = self.database.highest_priority_puzzle()
                 # Randomise perspective to hopefully help learning
-                self.board_perspective = random.choice([chess.WHITE, chess.BLACK]) # self.current_puzzle.whose_turn
+                self.randomise_perspective_and_mirroring()
                 self.game = chess.pgn.Game().from_board(chess.Board(fen=position_to_fen(self.current_puzzle.position)))
                 continue
 
@@ -846,6 +897,10 @@ class EasyChessGui:
 
             if button == 'Flip':
                 self.flip_board()
+                continue
+
+            if button == "Mirror":
+                self.mirrored = (self.mirrored + 1) % 2
                 continue
 
 
