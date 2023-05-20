@@ -556,7 +556,7 @@ class Database:
         if result is None:
             return None
         
-        if type(result) == int:
+        if type(result) == float:
             basic_result = (result, None)
         else:
             basic_result = (result[0]["score"], board.san(result[0]["pv"][0]))  # Simplify to evaluation, best_move
