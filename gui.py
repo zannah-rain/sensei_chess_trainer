@@ -690,6 +690,7 @@ class EasyChessGui:
 
             if button is None:
                 logging.info('Quit app from main loop, X is pressed.')
+                quit()
                 break
 
             window_read_result = self.get_human_move(window_read_result=window_read_result)
@@ -716,13 +717,17 @@ class EasyChessGui:
                             self.play_move(move=window_read_result)
 
                             new_eval = self.combined_evaluation(depth=10, nodes=100)
+
+                            # Want to move at least 5% towards the best move to consider myself 'improving' (otherwise 'success' can mean going from 99.9% loss to 99.8% when there's a way out)
                             if self.current_puzzle.whose_turn == chess.WHITE:
-                                if (new_eval > self.current_puzzle.latest_real_eval) and (new_eval >= self.current_puzzle.latest_practice_eval):
+                                goal_eval = max(self.current_puzzle.latest_practice_eval, self.current_puzzle.latest_real_eval) * 0.95 + self.current_puzzle.evaluation * 0.05
+                                if (new_eval >= goal_eval):
                                     puzzle_success()
                                 else:
                                     puzzle_fail()
                             else:
-                                if (new_eval < self.current_puzzle.latest_real_eval) and (new_eval <= self.current_puzzle.latest_practice_eval):
+                                goal_eval = min(self.current_puzzle.latest_practice_eval, self.current_puzzle.latest_real_eval) * 0.95 + self.current_puzzle.evaluation * 0.05
+                                if (new_eval <= goal_eval):
                                     puzzle_success()
                                 else:
                                     puzzle_fail()
@@ -784,6 +789,7 @@ class EasyChessGui:
 
 def main():
     theme = 'Reddit'
+
 
     pecg = EasyChessGui(theme)
 
