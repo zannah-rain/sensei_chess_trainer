@@ -36,7 +36,7 @@ class Engine(chess.engine.SimpleEngine):
         engine_eval = self.engine.analyse(board, limit, multipv=multipv)
 
         for i, eval in enumerate(engine_eval):
-            engine_eval[i]["score"] = engine_eval[i]["score"].white().wdl().expectation()  # Converting to json friendly format
+            engine_eval[i]["score"] = engine_eval[i]["score"].white().wdl(model="lichess").expectation()  # Converting to json friendly format
 
         return engine_eval
     

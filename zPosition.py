@@ -225,7 +225,7 @@ class zPosition:
                 else:
                     this_best_move = "NO_MOVE"
 
-                self._cached_engine_multidepth_evaluations[this_depth] = [this_best_move, this_eval[0]["score"].white().wdl().expectation()]
+                self._cached_engine_multidepth_evaluations[this_depth] = [this_best_move, this_eval[0]["score"].white().wdl(model="lichess").expectation()]
                 self.save()
                 logging.info(f"Saved new engine multidepth evaluation of FEN: {self.fen}. Eval: {self._cached_engine_multidepth_evaluations[this_depth]}")
 
@@ -243,11 +243,11 @@ class zPosition:
         if cloud_eval is not None:
             if cloud_eval["depth"] >= max(depth, self.engine_evaluation_depth):
                 if "cp" in cloud_eval["pvs"][0].keys():
-                    return chess.engine.Cp(cloud_eval["pvs"][0]["cp"]).wdl().expectation()
+                    return chess.engine.Cp(cloud_eval["pvs"][0]["cp"]).wdl(model="lichess").expectation()
 
         if (self.engine_evaluation_depth < depth) or (self._cached_engine_evaluation is None):
             engine_eval = engine.analyse(self.board, chess.engine.Limit(depth=depth), multipv=multipv)
-            engine_eval[0]["score"] = engine_eval[0]["score"].white().wdl().expectation()  # Converting to json friendly format
+            engine_eval[0]["score"] = engine_eval[0]["score"].white().wdl(model="lichess").expectation()  # Converting to json friendly format
             if "pv" in engine_eval[0].keys():
                 engine_eval[0]["pv"] = [i.uci() for i in engine_eval[0]["pv"]]  # Converting to json friendly format
             if "currmove" in engine_eval[0].keys():
@@ -269,7 +269,7 @@ class zPosition:
 
         if self.leela_evaluation_nodes < nodes:
             leela_eval = engine.analyse(self.board, chess.engine.Limit(nodes=nodes), multipv=multipv)
-            leela_eval[0]["score"] = leela_eval[0]["score"].white().wdl().expectation()  # Converting to json friendly format
+            leela_eval[0]["score"] = leela_eval[0]["score"].white().wdl(model="lichess").expectation()  # Converting to json friendly format
             if "pv" in leela_eval[0].keys():
                 leela_eval[0]["pv"] = [i.uci() for i in leela_eval[0]["pv"]]  # Converting to json friendly format
             if "currmove" in leela_eval[0].keys():
