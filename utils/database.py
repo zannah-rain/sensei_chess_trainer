@@ -408,6 +408,14 @@ class Database:
                 WHERE days_since_last_practiced <= 1
                 AND last_practiced_timestamp != last_seen_in_real_game
             ),
+            this_month_performance_stats AS (
+                SELECT 
+                    1 AS indxx,
+                    COUNT(*) AS positions_played,
+                    AVG(latest_real_eval_loss) AS average_real_eval_loss
+                FROM move_attempt_analysis
+                WHERE days_since_last_seen <= 30
+            ),
             todays_game_stats AS (
                 SELECT
                     1 AS indxx,
@@ -416,6 +424,13 @@ class Database:
                     SUM(length) AS total_half_moves
                 FROM games
                 WHERE JULIANDAY("NOW") - JULIANDAY(timestamp) <= 1
+            ),
+            overall_game_stats AS (
+                SELECT 
+                    1 AS indxx,
+                    COUNT(*) AS games_played,
+                    AVG(length) as average_half_moves
+                FROM games
             ),
             overall_practice_stats AS (
                 SELECT 
@@ -470,12 +485,18 @@ class Database:
                 overall_real_stats.sum_real_eval_loss AS total_real_eval_loss_alltime,
                 overall_real_stats.times_real_positions_seen_in_real_games AS total_real_positions_played_alltime,
                 overall_real_stats.average_time_per_move_real AS average_real_time_per_move_alltime,
-                overall_real_stats.total_review_priority AS total_review_priority
+                overall_real_stats.total_review_priority AS total_review_priority,
+                overall_game_stats.games_played AS total_games_played,
+                overall_game_stats.average_half_moves AS average_game_halfmoves_alltime,
+                this_month_performance_stats.positions_played AS this_month_positions_played,
+                this_month_performance_stats.average_real_eval_loss AS this_month_average_real_eval_loss
             FROM 
                 todays_practice_stats
                 INNER JOIN todays_game_stats ON todays_practice_stats.indxx = todays_game_stats.indxx
                 INNER JOIN overall_practice_stats ON todays_practice_stats.indxx = overall_practice_stats.indxx
                 INNER JOIN overall_real_stats ON todays_practice_stats.indxx = overall_real_stats.indxx
+                INNER JOIN overall_game_stats ON todays_practice_stats.indxx = overall_game_stats.indxx
+                INNER JOIN this_month_performance_stats ON todays_practice_stats.indxx = this_month_performance_stats.indxx
         """)
 
         # Tracking FEN level data
