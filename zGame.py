@@ -46,7 +46,7 @@ class zGame:
             self.eval_cache[depth.__str__()] = scores
 
         if evaluation:
-            return [i.wdl().relative.expectation() for i in self.eval_cache[depth.__str__()]]
+            return [i.wdl(model="lichess").relative.expectation() for i in self.eval_cache[depth.__str__()]]
         else:
             return self.eval_cache[depth.__str__()]
 
@@ -157,7 +157,7 @@ class zGame:
     def player_evaluation_loss(self, depth=chess.engine.Limit(time=0.1), player: str = username):
         scores = self.eval(depth=depth)
         scores = [i.white() for i in scores]
-        scores = [i.wdl().expectation() for i in scores]
+        scores = [i.wdl(model="lichess").expectation() for i in scores]
 
         if self.game.headers["White"] == player:
             first_player_move = 0
