@@ -63,6 +63,7 @@ import playsound
 import random
 import pandas as pd
 from utils.promotion_select_window import select_promotion_piece
+from textwrap import dedent
 
 logging.basicConfig(level=logging.INFO)
 
@@ -129,6 +130,10 @@ class EasyChessGui:
         self.text_output_puzzle_latest_evaluation_loss = None
         self.text_output_puzzle_real_time_control = None
         self.text_output_puzzle_latest_time_taken = None
+        self.text_output_today_games = None
+        self.text_output_today_puzzles = None
+        self.text_output_alltime_games = None
+        self.text_output_alltime_puzzles = None
 
         # Puzzle stuff
         self._current_puzzle: Puzzle = None
@@ -291,6 +296,30 @@ class EasyChessGui:
                 self.text_output_puzzle_latest_time_taken.update(f"Last time taken: {self.current_puzzle.latest_practice_time_taken_seconds}")
         else:
             self.text_output_puzzle_priority.update(f"No puzzle loaded.")
+
+        stats = dict(self.database.con.execute("SELECT * FROM move_stats").fetchall()[0])
+        self.text_output_today_games.update(dedent(text=f"""\
+            Games played: {stats["total_games_played_today"]}
+            New puzzles: {stats["total_half_moves_from_real_games_today"] // 2}"""))
+        self.text_output_today_puzzles.update(dedent(text=f"""\
+            Puzzles done: {stats["positions_practiced_today"]}
+            Average original eval loss: {stats["average_real_eval_loss_today"]:.3f}
+            Average new eval loss: {stats["average_practice_eval_loss_today"]:.3f}
+            Improvement: {(1 - stats["average_practice_eval_loss_today"] / stats["average_real_eval_loss_today"]) * 100:.1f}%
+            """))
+        self.text_output_alltime_games.update(dedent(f"""\
+            Total games played: {stats["total_games_played"]}
+            Average game length: {stats["average_game_halfmoves_alltime"] // 2}
+            Average eval loss: {stats["average_real_eval_loss_alltime"]:.3f}
+            Average eval loss per game: {stats["average_real_eval_loss_alltime"] * stats["average_game_halfmoves_alltime"] / 2:.2f}
+            This month average eval loss: {stats["this_month_average_real_eval_loss"]:.3f}
+            Average time per move: {stats["average_real_time_per_move_alltime"]:.1f}
+            Total unique positions played: {stats["total_unique_real_positions_played_alltime"]}"""))
+        self.text_output_alltime_puzzles.update(dedent(f"""\
+            Puzzles done: {stats["total_positions_practiced_alltime"]}
+            Average puzzle original eval loss: {stats["average_real_eval_loss_in_practiced_positions"]:.3f}
+            Average puzzle new eval loss: {stats["average_practice_eval_loss_alltime"]:.3f}
+            Times a practiced positions has occurred in a real game: {stats["times_practiced_positions_seen_in_real_games"]}"""))
 
     @property
     def position(self) -> str:
@@ -725,6 +754,10 @@ class EasyChessGui:
         self.text_output_puzzle_latest_evaluation_loss = sg.Text()
         self.text_output_puzzle_real_time_control = sg.Text()
         self.text_output_puzzle_latest_time_taken = sg.Text()
+        self.text_output_today_games = sg.Text()
+        self.text_output_today_puzzles = sg.Text()
+        self.text_output_alltime_games = sg.Text()
+        self.text_output_alltime_puzzles = sg.Text()
 
         main_layout = [[sg.Frame("Position Info", [[self.text_output_board_date_seen],
                                                    [self.text_output_board_eval_stockfish],
@@ -740,12 +773,18 @@ class EasyChessGui:
                                                    [self.text_output_puzzle_latest_attempt_evaluation],
                                                    [self.text_output_puzzle_latest_evaluation_loss]])],
                          [sg.Button("Next Lesson")]]
+        today_layout = [[sg.Frame(title="Games", layout=[[self.text_output_today_games]])],
+                        [sg.Frame(title="Puzzles", layout=[[self.text_output_today_puzzles]])]]
+        alltime_layout = [[sg.Frame(title="Games", layout=[[self.text_output_alltime_games]])],
+                          [sg.Frame(title="Puzzles", layout=[[self.text_output_alltime_puzzles]])]]
 
         # l1 is the layout for tab1
         # l2 is the layout for tab2
         tab_main=sg.Tab("Play", main_layout)
         tab_puzzles=sg.Tab("Puzzles", puzzle_layout)
-        Tg = sg.TabGroup([[tab_main, tab_puzzles]])
+        tab_today=sg.Tab("Today", today_layout)
+        tab_alltime=sg.Tab("All-Time", alltime_layout)
+        Tg = sg.TabGroup([[tab_main, tab_puzzles, tab_today, tab_alltime]])
         # This titlegroup object may be further used
         # in the row of the main layout.
 
