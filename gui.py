@@ -130,10 +130,12 @@ class EasyChessGui:
         self.text_output_puzzle_latest_evaluation_loss = None
         self.text_output_puzzle_real_time_control = None
         self.text_output_puzzle_latest_time_taken = None
+        self.progress_output_today_study = None
         self.text_output_today_games = None
         self.text_output_today_puzzles = None
         self.text_output_alltime_games = None
         self.text_output_alltime_puzzles = None
+        self.tab_container = None
 
         # Puzzle stuff
         self._current_puzzle: Puzzle = None
@@ -298,6 +300,7 @@ class EasyChessGui:
             self.text_output_puzzle_priority.update(f"No puzzle loaded.")
 
         stats = dict(self.database.con.execute("SELECT * FROM move_stats").fetchall()[0])
+        self.progress_output_today_study.update(stats["positions_practiced_today"] / (3 * stats["total_half_moves_from_real_games_today"] // 2))
         self.text_output_today_games.update(dedent(text=f"""\
             Games played: {stats["total_games_played_today"]}
             New puzzles: {stats["total_half_moves_from_real_games_today"] // 2}"""))
@@ -754,6 +757,7 @@ class EasyChessGui:
         self.text_output_puzzle_latest_evaluation_loss = sg.Text()
         self.text_output_puzzle_real_time_control = sg.Text()
         self.text_output_puzzle_latest_time_taken = sg.Text()
+        self.progress_output_today_study = sg.ProgressBar(max_value=1, expand_x=True, size=(1, 3))
         self.text_output_today_games = sg.Text()
         self.text_output_today_puzzles = sg.Text()
         self.text_output_alltime_games = sg.Text()
@@ -774,17 +778,18 @@ class EasyChessGui:
                                                    [self.text_output_puzzle_latest_evaluation_loss]])],
                          [sg.Button("Next Lesson")]]
         today_layout = [[sg.Frame(title="Games", layout=[[self.text_output_today_games]])],
-                        [sg.Frame(title="Puzzles", layout=[[self.text_output_today_puzzles]])]]
+                        [sg.Frame(title="Puzzles", layout=[[self.progress_output_today_study],
+                                                           [self.text_output_today_puzzles]])]]
         alltime_layout = [[sg.Frame(title="Games", layout=[[self.text_output_alltime_games]])],
                           [sg.Frame(title="Puzzles", layout=[[self.text_output_alltime_puzzles]])]]
 
         # l1 is the layout for tab1
         # l2 is the layout for tab2
-        tab_main=sg.Tab("Play", main_layout)
-        tab_puzzles=sg.Tab("Puzzles", puzzle_layout)
-        tab_today=sg.Tab("Today", today_layout)
-        tab_alltime=sg.Tab("All-Time", alltime_layout)
-        Tg = sg.TabGroup([[tab_main, tab_puzzles, tab_today, tab_alltime]])
+        tab_main=sg.Tab("Play", main_layout, key="main_tab")
+        tab_puzzles=sg.Tab("Puzzles", puzzle_layout, key="puzzles_tab")
+        tab_today=sg.Tab("Today", today_layout, key="today_tab")
+        tab_alltime=sg.Tab("All-Time", alltime_layout, key="alltime_tab")
+        self.tab_container = sg.TabGroup([[tab_main, tab_puzzles, tab_today, tab_alltime]])
         # This titlegroup object may be further used
         # in the row of the main layout.
 
@@ -793,7 +798,7 @@ class EasyChessGui:
                 [sg.Column(board_tab), 
                  sg.VSeparator(), 
                  sg.Column([[self.text_output_whose_turn],
-                            [Tg],
+                            [self.tab_container],
                             [sg.Button("Engine Move")],
                             [sg.Button("<-"), sg.Button("->")]])]
         ]
