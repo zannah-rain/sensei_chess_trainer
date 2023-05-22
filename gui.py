@@ -79,7 +79,7 @@ MAX_DEPTH = 1000
 
 
 menu_def_neutral = [
-        ["File", ["Open .pgn", "Download all lichess .pgn's", "Download 1 lichess .pgn", "Build puzzles"]],
+        ["File", ["Open .pgn", "Build puzzles"]],
         ['Boar&d', ['Flip', "Mirror", 'Color', ['Brown::board_color_k',
                                       'Blue::board_color_k',
                                       'Green::board_color_k',
@@ -88,6 +88,7 @@ menu_def_neutral = [
                    ]
         ],
         ["Data", ["Time Controls", "Games", "Stats"]],
+        ["Lichess", ["Download all lichess .pgn's", "Download 1 lichess .pgn", "Download this positions lichess stats"]],
         ['&Time', ['User::tc_k', 'Engine::tc_k']],
         ['&Settings', ['Game::settings_game_k']],
         ['&Help', ['About']],
@@ -131,6 +132,7 @@ class EasyChessGui:
         self.text_output_puzzle_real_time_control = None
         self.text_output_puzzle_latest_time_taken = None
         self.progress_output_today_study = None
+        self.progress_output_puzzles_study = None
         self.text_output_today_games = None
         self.text_output_today_puzzles = None
         self.text_output_alltime_games = None
@@ -253,7 +255,7 @@ class EasyChessGui:
         else:
             turn_text = "Black to play"
         if self.mirrored:
-            turn_text += " (Mirrored!?)"
+            turn_text += " (Mirrored puzzle)"
         self.text_output_whose_turn.update(turn_text)
 
         last_seen = self.database.position_last_played(gamenode_position(value))
@@ -300,7 +302,8 @@ class EasyChessGui:
             self.text_output_puzzle_priority.update(f"No puzzle loaded.")
 
         stats = dict(self.database.con.execute("SELECT * FROM move_stats").fetchall()[0])
-        self.progress_output_today_study.update(stats["positions_practiced_today"] / (3 * stats["total_half_moves_from_real_games_today"] // 2))
+        self.progress_output_today_study.update(stats["positions_practiced_today"] / (max(stats["total_half_moves_from_real_games_today"], 10) // 2))
+        self.progress_output_puzzles_study.update(stats["positions_practiced_today"] / (max(stats["total_half_moves_from_real_games_today"], 10) // 2))
         self.text_output_today_games.update(dedent(text=f"""\
             Games played: {stats["total_games_played_today"]}
             New puzzles: {stats["total_half_moves_from_real_games_today"] // 2}"""))
@@ -758,6 +761,7 @@ class EasyChessGui:
         self.text_output_puzzle_real_time_control = sg.Text()
         self.text_output_puzzle_latest_time_taken = sg.Text()
         self.progress_output_today_study = sg.ProgressBar(max_value=1, expand_x=True, size=(1, 3))
+        self.progress_output_puzzles_study = sg.ProgressBar(max_value=1, expand_x=True, size=(1, 3))
         self.text_output_today_games = sg.Text()
         self.text_output_today_puzzles = sg.Text()
         self.text_output_alltime_games = sg.Text()
@@ -766,7 +770,9 @@ class EasyChessGui:
         main_layout = [[sg.Frame("Position Info", [[self.text_output_board_date_seen],
                                                    [self.text_output_board_eval_stockfish],
                                                    [self.text_output_board_eval_leela]])]]
-        puzzle_layout = [[sg.Frame("Puzzle Info", [[self.text_output_puzzle_priority],
+        puzzle_layout = [[sg.Frame("Puzzle Info", [
+                                                   [self.progress_output_puzzles_study],
+                                                   [self.text_output_puzzle_priority],
                                                    [self.text_output_puzzle_times_seen_in_real_games],
                                                    [self.text_output_puzzle_last_practiced_date],
                                                    [self.text_output_puzzle_real_time_control],
@@ -789,7 +795,7 @@ class EasyChessGui:
         tab_puzzles=sg.Tab("Puzzles", puzzle_layout, key="puzzles_tab")
         tab_today=sg.Tab("Today", today_layout, key="today_tab")
         tab_alltime=sg.Tab("All-Time", alltime_layout, key="alltime_tab")
-        self.tab_container = sg.TabGroup([[tab_main, tab_puzzles, tab_today, tab_alltime]])
+        self.tab_container = sg.TabGroup([[tab_puzzles, tab_main, tab_today, tab_alltime]])
         # This titlegroup object may be further used
         # in the row of the main layout.
 
@@ -918,6 +924,10 @@ class EasyChessGui:
             if button == "Stats":
                 self.popup_display_table(popup_title="Stats",
                                          data=pd.DataFrame(dict(self.database.con.execute("SELECT * FROM move_stats").fetchall()[0]), index=["Values"]).transpose().reset_index())
+                continue
+
+            if button == "Download this positions lichess stats":
+                self.database._populate_lichess_stats(fen=self.fen)
                 continue
                 
 
