@@ -34,7 +34,16 @@ class Database:
                  file="chess_database.db"):
         self.con = sqlite3.connect(database=file)
         self.con.row_factory = sqlite3.Row
+        self.con.executescript("""PRAGMA journal_mode = wal;  -- Faster writes
+                                  PRAGMA synchronous = normal;  -- Slightly less safety but much faster
+                                  PRAGMA temp_store = 2;  -- Keep temp stuff in memory more often
+                                  PRAGMA cache_size = -128000;  -- 128mb RAM cache (default is 2 or something :o)""")
         self.initialise_database_schema()
+
+    def close_and_optimise(self):
+        self.con.executescript("""PRAGMA analysis_limit=400;
+                                  PRAGMA optimize;""")
+        self.con.close()
 
     def _lichess_opening_api_query(self, query_url: str):
         if globals.explorer_limit:
@@ -645,6 +654,17 @@ class Database:
                                  AND timestamp=(SELECT MAX(timestamp) FROM move_attempts WHERE position=NEW.position AND player='{username}');
                              END
                              """)
+        
+    def get_position_comment(self, position: str) -> str:
+        comment = self.con.execute(f"SELECT comment FROM positions WHERE position = '{position}'").fetchone()
+        if comment is None:
+            return ""
+        return comment["comment"]
+
+    def set_position_comment(self, position: str, comment: str, commit: bool = True) -> None:
+        self.con.execute(f"INSERT OR REPLACE INTO positions (position, comment) VALUES(?, ?)", (position, comment))
+        if commit:
+            self.con.commit()
 
     def initialise_database_schema(self):
         # All games of interest which could be used to generate lessons / statistics
@@ -1008,9 +1028,9 @@ class Database:
             return None
         
         if type(result) == int:
-            basic_result = (result, None)
+            basic_result = (result.lichess_evaluation, None)
         else:
-            basic_result = (result[0]["score"], board.san(result[0]["pv"][0]))  # Simplify to evaluation, best_move
+            basic_result = (result.lichess_evaluation, board.san(result.best_move))  # Simplify to evaluation, best_move
 
         self.con.execute(f"""INSERT INTO {engine.evaluations_table} (position,{engine.depth_parameter},evaluation,best_move) VALUES(?,?,?,?)""",
                          (
@@ -1022,7 +1042,7 @@ class Database:
         if commit:
             self.con.commit()
 
-        return result[0]["pv"][0]
+        return result.best_move
     
     def _run_engine_evaluation(self,
                                board: chess.Board,
@@ -1034,13 +1054,18 @@ class Database:
 
         if result is None:
             return None
+        
+        if result.best_move is None:
+            best_move = None
+        else:
+            best_move = board.san(result.best_move)
 
         self.con.execute(f"""INSERT OR REPLACE INTO {engine.evaluations_table} (position,{engine.depth_parameter},evaluation,best_move) VALUES(?,?,?,?)""",
                          (
                             board_position(board),
                             depth_value,
                             result.lichess_evaluation,
-                            board.san(result.best_principal_variation.pv[0])
+                            best_move
                          ))
         if commit:
             self.con.commit()

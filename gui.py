@@ -64,6 +64,7 @@ import random
 import pandas as pd
 from utils.promotion_select_window import select_promotion_piece
 from textwrap import dedent
+from io import StringIO
 
 logging.basicConfig(level=logging.INFO)
 
@@ -93,6 +94,12 @@ menu_def_neutral = [
         ['&Settings', ['Game::settings_game_k']],
         ['&Help', ['About']],
 ]
+
+
+def ifnone(x, y):
+    if x is None:
+        return y
+    return x
 
 
 class EasyChessGui:
@@ -138,6 +145,7 @@ class EasyChessGui:
         self.text_output_alltime_games = None
         self.text_output_alltime_puzzles = None
         self.tab_container = None
+        self.text_io_review_comment = None
 
         # Puzzle stuff
         self._current_puzzle: Puzzle = None
@@ -155,6 +163,7 @@ class EasyChessGui:
         self.move_sq_dark_color = '#B8AF4E'
 
         self.window = None
+        self._game_node = None
         self.create_new_window()
         
         self.game = chess.pgn.Game()
@@ -309,32 +318,42 @@ class EasyChessGui:
             New puzzles: {stats["total_half_moves_from_real_games_today"] // 2}"""))
         self.text_output_today_puzzles.update(dedent(text=f"""\
             Puzzles done: {stats["positions_practiced_today"]}
-            Average original eval loss: {stats["average_real_eval_loss_today"]:.3f}
-            Average new eval loss: {stats["average_practice_eval_loss_today"]:.3f}
-            Improvement: {(1 - stats["average_practice_eval_loss_today"] / stats["average_real_eval_loss_today"]) * 100:.1f}%
+            Average original eval loss: {ifnone(stats["average_real_eval_loss_today"], 0):.3f}
+            Average new eval loss: {ifnone(stats["average_practice_eval_loss_today"], 0):.3f}
+            Improvement: {(1 - ifnone(stats["average_practice_eval_loss_today"], 0) / ifnone(stats["average_real_eval_loss_today"], 1)) * 100:.1f}%
             """))
         self.text_output_alltime_games.update(dedent(f"""\
             Total games played: {stats["total_games_played"]}
-            Average game length: {stats["average_game_halfmoves_alltime"] // 2}
-            Average eval loss: {stats["average_real_eval_loss_alltime"]:.3f}
-            Average eval loss per game: {stats["average_real_eval_loss_alltime"] * stats["average_game_halfmoves_alltime"] / 2:.2f}
-            This month average eval loss: {stats["this_month_average_real_eval_loss"]:.3f}
-            Average time per move: {stats["average_real_time_per_move_alltime"]:.1f}
+            Average game length: {ifnone(stats["average_game_halfmoves_alltime"], 0) // 2}
+            Average eval loss: {ifnone(stats["average_real_eval_loss_alltime"], 0):.3f}
+            Average eval loss per game: {ifnone(stats["average_real_eval_loss_alltime"], 0) * ifnone(stats["average_game_halfmoves_alltime"], 0) / 2:.2f}
+            This month average eval loss: {ifnone(stats["this_month_average_real_eval_loss"], 0):.3f}
+            Average time per move: {ifnone(stats["average_real_time_per_move_alltime"], 0):.1f}
             Total unique positions played: {stats["total_unique_real_positions_played_alltime"]}"""))
         self.text_output_alltime_puzzles.update(dedent(f"""\
             Puzzles done: {stats["total_positions_practiced_alltime"]}
-            Average puzzle original eval loss: {stats["average_real_eval_loss_in_practiced_positions"]:.3f}
-            Average puzzle new eval loss: {stats["average_practice_eval_loss_alltime"]:.3f}
+            Average puzzle original eval loss: {ifnone(stats["average_real_eval_loss_in_practiced_positions"], 0):.3f}
+            Average puzzle new eval loss: {ifnone(stats["average_practice_eval_loss_alltime"], 0):.3f}
             Times a practiced positions has occurred in a real game: {stats["times_practiced_positions_seen_in_real_games"]}"""))
+        self.text_io_review_comment.update(self.review_comment)
+
+    @property
+    def review_comment(self) -> str:
+        """The review comment of the current position"""
+        return self.database.get_position_comment(position=self.position)
 
     @property
     def position(self) -> str:
+        if self.board is None:
+            return None
         return board_position(board=self.board)
     
     @property
     def board(self) -> chess.Board:
         # Accessor as changes to this board should prompt re-drawing and stuff like that
         # Don't want in general to directly modify it
+        if self.game_node is None:
+            return None
         return self.game_node.board().copy()
     
     @property
@@ -402,7 +421,9 @@ class EasyChessGui:
                                [sg.Ok()]]
 
         popup_window = sg.Window(title=popup_title,
-                                                                layout=popup_layout).read(close=True)
+                                 layout=popup_layout).read(close=True)
+        
+        return popup_window
 
     def create_new_window(self) -> sg.Window:
         """ Close the window param just before turning the new window """
@@ -766,6 +787,7 @@ class EasyChessGui:
         self.text_output_today_puzzles = sg.Text()
         self.text_output_alltime_games = sg.Text()
         self.text_output_alltime_puzzles = sg.Text()
+        self.text_io_review_comment = sg.Multiline(default_text=self.review_comment, size=(None,20), change_submits=True, key="review_comment_key", expand_x=True, expand_y=True)
 
         main_layout = [[sg.Frame("Position Info", [[self.text_output_board_date_seen],
                                                    [self.text_output_board_eval_stockfish],
@@ -788,6 +810,7 @@ class EasyChessGui:
                                                            [self.text_output_today_puzzles]])]]
         alltime_layout = [[sg.Frame(title="Games", layout=[[self.text_output_alltime_games]])],
                           [sg.Frame(title="Puzzles", layout=[[self.text_output_alltime_puzzles]])]]
+        review_layout = [[sg.Frame(title="Comment", layout=[[self.text_io_review_comment]])]]
 
         # l1 is the layout for tab1
         # l2 is the layout for tab2
@@ -795,7 +818,8 @@ class EasyChessGui:
         tab_puzzles=sg.Tab("Puzzles", puzzle_layout, key="puzzles_tab")
         tab_today=sg.Tab("Today", today_layout, key="today_tab")
         tab_alltime=sg.Tab("All-Time", alltime_layout, key="alltime_tab")
-        self.tab_container = sg.TabGroup([[tab_puzzles, tab_main, tab_today, tab_alltime]])
+        tab_review=sg.Tab("Review", review_layout, key="review_tab")
+        self.tab_container = sg.TabGroup([[tab_puzzles, tab_main, tab_today, tab_alltime, tab_review]])
         # This titlegroup object may be further used
         # in the row of the main layout.
 
@@ -828,8 +852,13 @@ class EasyChessGui:
 
             if button is None:
                 logging.info(msg='Quit app from main loop, X is pressed.')
-                quit()
+                self.database.close_and_optimise()
+                self.stockfish().engine.close()
+                self.leela().engine.close()
                 break
+
+            if value["review_comment_key"] != self.review_comment:
+                self.database.set_position_comment(position=self.position, comment=value["review_comment_key"])
 
             window_read_result = self.get_human_move(window_read_result=window_read_result)
             if window_read_result is None:
@@ -910,15 +939,18 @@ class EasyChessGui:
                 continue
 
             if button == "Time Controls":
+                time_control_table = pd.DataFrame(self.database.con.execute("SELECT time_control, total_games, average_n_moves, average_total_time_seconds, average_seconds_per_move FROM time_controls_summary").fetchall(),
+                                          columns=["time_control", "total_games", "average_n_moves", "average_total_time_seconds", "average_seconds_per_move"]).sort_values("total_games", ascending=False)
                 self.popup_display_table(popup_title="Time Control Data",
-                                         data=pd.DataFrame(self.database.con.execute("SELECT time_control, total_games, average_n_moves, average_total_time_seconds, average_seconds_per_move FROM time_controls_summary").fetchall(),
-                                                           columns=["time_control", "total_games", "average_n_moves", "average_total_time_seconds", "average_seconds_per_move"]).sort_values("total_games", ascending=False))
+                                         data=time_control_table)
                 continue
 
             if button == "Games":
-                self.popup_display_table(popup_title="Games",
-                                         data=pd.DataFrame(data=self.database.con.execute("SELECT white, black, timestamp, link, result, time_control, variant, length FROM games").fetchall(),
-                                                           columns=["white", "black", "timestamp", "link", "result", "time_control", "variant", "length"]).sort_values(by="timestamp", ascending=False))
+                game_table = pd.DataFrame(data=self.database.con.execute("SELECT white, black, timestamp, link, result, time_control, variant, length, pgn FROM games").fetchall(),
+                                          columns=["white", "black", "timestamp", "link", "result", "time_control", "variant", "length", "pgn"]).sort_values(by="timestamp", ascending=False)
+                popup_result = self.popup_display_table(popup_title="Games",
+                                                        data=game_table.drop(columns=["pgn"]))
+                self.game_node = chess.pgn.read_game(StringIO(game_table.iloc[popup_result[1][0][0], :]["pgn"]))
                 continue
 
             if button == "Stats":

@@ -115,7 +115,10 @@ class EngineEvaluationResult:
 
         self.raw_info_dicts = info_dicts
         self.certain_evaluation = certain_evaluation
-        self.principal_variations = [PrincipalVariation(i) for i in info_dicts]
+        if info_dicts is not None:
+            self.principal_variations = [PrincipalVariation(i) for i in info_dicts]
+        else:
+            self.principal_variations = None
 
         if certain_evaluation is not None:
             assert certain_evaluation in [0, 0.5, 1]
@@ -126,6 +129,12 @@ class EngineEvaluationResult:
     def pv(self) -> List[chess.Move]:
         """List of moves from the mainline principal variation."""
         return self.best_principal_variation.pv
+    
+    @property
+    def best_move(self) -> chess.Move:
+        if self.principal_variations is None:
+            return None
+        return self.principal_variations[0].pv[0]
     
     @property
     def best_principal_variation(self) -> PrincipalVariation:
