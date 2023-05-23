@@ -1009,40 +1009,20 @@ class Database:
         else:
             comparator = ">="
 
-        if bool(self.con.execute(f"""SELECT EXISTS (SELECT 1 
+        if not bool(self.con.execute(f"""SELECT EXISTS (SELECT 1 
                                                     FROM {engine.evaluations_table} 
                                                     WHERE position='{position}'
                                                     AND {engine.depth_parameter}{comparator}{depth_value}
                                                     LIMIT 1)""").fetchone()[0]):
-            san_move =  self.con.execute(f"""SELECT best_move
-                                             FROM {engine.evaluations_table}
-                                             WHERE position='{position}'
-                                             AND {engine.depth_parameter}{comparator}{depth_value}
-                                             ORDER BY {engine.depth_parameter} DESC
-                                             LIMIT 1""").fetchone()[0]
-            return board.parse_san(san_move)
-        
-        result = engine.evaluate_board(board=board, depth_value=depth_value)
+            self._run_engine_evaluation(board=board, engine=engine, depth_value=depth_value, multipv=multipv, commit=commit)
 
-        if result is None:
-            return None
-        
-        if type(result) == int:
-            basic_result = (result.lichess_evaluation, None)
-        else:
-            basic_result = (result.lichess_evaluation, board.san(result.best_move))  # Simplify to evaluation, best_move
-
-        self.con.execute(f"""INSERT INTO {engine.evaluations_table} (position,{engine.depth_parameter},evaluation,best_move) VALUES(?,?,?,?)""",
-                         (
-                            board_position(board),
-                            depth_value,
-                            basic_result[0],
-                            basic_result[1]
-                         ))
-        if commit:
-            self.con.commit()
-
-        return result.best_move
+        san_move =  self.con.execute(f"""SELECT best_move
+                                            FROM {engine.evaluations_table}
+                                            WHERE position='{position}'
+                                            AND {engine.depth_parameter}{comparator}{depth_value}
+                                            ORDER BY {engine.depth_parameter} DESC
+                                            LIMIT 1""").fetchone()[0]
+        return board.parse_san(san_move)
     
     def _run_engine_evaluation(self,
                                board: chess.Board,
