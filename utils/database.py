@@ -441,6 +441,7 @@ class Database:
 
     def initialise_positions_tables(self):
         # Tracking which positions have been seen when, and who was playing each side
+        # You can use this to get game info, as games are basically identified by (white, black, timestamp)
         self.con.execute(f"""CREATE TABLE IF NOT EXISTS positions_seen_in_games (
             position TEXT NOT NULL,
             whose_turn INTEGER NOT NULL,
@@ -486,7 +487,29 @@ class Database:
                                 FROM positions_seen_in_games
                                 WHERE position=NEW.position;
                             END""")
-        
+
+        self.con.execute(f"""CREATE TEMP VIEW game_stats AS
+            SELECT
+                g.white AS white,
+                g.black AS black,
+                g.timestamp AS timestamp,
+                g.event AS event,
+                g.link AS link,
+                g.result AS result,
+                g.time_control AS time_control,
+                g.variant AS variant,
+                g.pgn AS pgn,
+                g.length AS length,
+                psig.is_users_turn AS is_users_turn,
+                COUNT(psig.position) AS unique_positions,
+                COUNT(p.comment) AS positions_reviewed,
+                CAST(COUNT(p.comment) AS FLOAT) / COUNT(psig.position) AS proportion_reviewed
+            FROM games g
+            INNER JOIN positions_seen_in_games psig ON g.white=psig.white AND g.black=psig.black AND g.timestamp=psig.timestamp
+            LEFT JOIN positions p ON psig.position = p.position
+            GROUP BY g.white, g.black, g.timestamp
+        """)
+
         
     def initialise_combined_engine_tables(self):
         self.con.execute("""CREATE TABLE IF NOT EXISTS combined_engine_evaluation (
@@ -962,6 +985,7 @@ class Database:
         """Should be called ONCE for each observed position in a real game."""
         assert (white == username) or (black == username)
         assert isinstance(timestamp, datetime.datetime)
+        assert board.is_valid()
 
         position = fen_to_position(board.fen())
 
@@ -982,10 +1006,11 @@ class Database:
         for n, i in enumerate(positions_to_evaluate):
             fen = f"{i} 0 0"
             board = chess.Board(fen=fen)
-            self.engine_evaluation(board=board, engine=engine, depth_value=depth_value, commit=False)
-            logging.info(f"{engine.name} evaluation done! {n} / {len(positions_to_evaluate)}")
-            if n % 100 == 0:
-                self.con.commit()
+            if board.is_valid():
+                self.engine_evaluation(board=board, engine=engine, depth_value=depth_value, commit=False)
+                logging.info(f"{engine.name} evaluation done! {n} / {len(positions_to_evaluate)}")
+                if n % 100 == 0:
+                    self.con.commit()
         
         self.con.commit()
     
@@ -1059,6 +1084,7 @@ class Database:
                           multipv: int = 1, 
                           commit: bool = True,
                           exact_requirements: bool = False) -> EngineEvaluationResult:
+        assert board.is_valid()
         position = board_position(board)
 
         if exact_requirements:

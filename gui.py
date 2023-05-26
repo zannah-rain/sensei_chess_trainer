@@ -888,13 +888,20 @@ class EasyChessGui:
 
                             # Want to move at least 5% towards the best move to consider myself 'improving' (otherwise 'success' can mean going from 99.9% loss to 99.8% when there's a way out)
                             if self.current_puzzle.whose_turn == chess.WHITE:
+                                # At least 5% improvement on last try if not the best move
                                 goal_eval = max(self.current_puzzle.latest_practice_eval, self.current_puzzle.latest_real_eval) * 0.95 + self.current_puzzle.evaluation * 0.05
+                                # At most 10% evaluation loss against best move
+                                goal_eval = max(goal_eval, self.current_puzzle.evaluation - 0.1)
+                                # Always success if within 1% evaluation of best move (at least while engine evaluations aren't so reliable cos I want them fast)
+                                goal_eval = min(goal_eval, self.current_puzzle.evaluation - 0.01)
                                 if (new_eval >= goal_eval):
                                     puzzle_success()
                                 else:
                                     puzzle_fail()
                             else:
                                 goal_eval = min(self.current_puzzle.latest_practice_eval, self.current_puzzle.latest_real_eval) * 0.95 + self.current_puzzle.evaluation * 0.05
+                                goal_eval = min(goal_eval, self.current_puzzle.evaluation + 0.1)
+                                goal_eval = max(goal_eval, self.current_puzzle.evaluation + 0.01)
                                 if (new_eval <= goal_eval):
                                     puzzle_success()
                                 else:
@@ -946,11 +953,13 @@ class EasyChessGui:
                 continue
 
             if button == "Games":
-                game_table = pd.DataFrame(data=self.database.con.execute("SELECT white, black, timestamp, link, result, time_control, variant, length, pgn FROM games").fetchall(),
-                                          columns=["white", "black", "timestamp", "link", "result", "time_control", "variant", "length", "pgn"]).sort_values(by="timestamp", ascending=False)
+                game_table = pd.DataFrame(data=self.database.con.execute("SELECT white, black, timestamp, link, result, time_control, variant, length, pgn, unique_positions, positions_reviewed, proportion_reviewed FROM game_stats").fetchall(),
+                                          columns=["white", "black", "timestamp", "link", "result", "time_control", "variant", "length", "pgn", "unique_positions", "positions_reviewed", "proportion_reviewed"]).sort_values(by="timestamp", ascending=False)
+                game_table["proportion_reviewed"] = game_table["proportion_reviewed"].apply(lambda x: f"{x*100:.1f}%")
                 popup_result = self.popup_display_table(popup_title="Games",
                                                         data=game_table.drop(columns=["pgn"]))
-                self.game_node = chess.pgn.read_game(StringIO(game_table.iloc[popup_result[1][0][0], :]["pgn"]))
+                if popup_result[1][0] is not None:
+                    self.game_node = chess.pgn.read_game(StringIO(game_table.iloc[popup_result[1][0][0], :]["pgn"]))
                 continue
 
             if button == "Stats":
