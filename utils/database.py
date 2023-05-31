@@ -685,7 +685,29 @@ class Database:
         return comment["comment"]
 
     def set_position_comment(self, position: str, comment: str, commit: bool = True) -> None:
-        self.con.execute(f"INSERT OR REPLACE INTO positions (position, comment) VALUES(?, ?)", (position, comment))
+        self.con.execute(f"INSERT OR REPLACE INTO positions (position, comment, manual_evaluation, name) VALUES(?, ?, (SELECT manual_evaluation from positions where position='{position}'), (SELECT name from positions where position='{position}'))", (position, comment))
+        if commit:
+            self.con.commit()
+
+    def get_position_manual_evaluation(self, position: str) -> str:
+        evaluation = self.con.execute(f"SELECT manual_evaluation FROM positions WHERE position = '{position}'").fetchone()
+        if evaluation is None:
+            return None
+        return evaluation["manual_evaluation"]
+
+    def set_position_manual_evaluation(self, position: str, manual_evaluation: float, commit: bool = True) -> None:
+        self.con.execute(f"INSERT OR REPLACE INTO positions (position, comment, manual_evaluation, name) VALUES(?, (SELECT comment from positions where position='{position}'), ?, (SELECT name from positions where position='{position}'))", (position, manual_evaluation))
+        if commit:
+            self.con.commit()
+
+    def get_position_name(self, position: str) -> str:
+        name = self.con.execute(f"SELECT name FROM positions WHERE position = '{position}'").fetchone()
+        if name is None:
+            return None
+        return name["name"]
+
+    def set_position_name(self, position: str, name: str, commit: bool = True) -> None:
+        self.con.execute(f"INSERT OR REPLACE INTO positions (position, comment, manual_evaluation, name) VALUES(?, (SELECT comment from positions where position='{position}'), (SELECT manual_evaluation from positions where position='{position}'), ?)", (position, name))
         if commit:
             self.con.commit()
 
@@ -699,6 +721,8 @@ class Database:
         self.con.execute("""CREATE TABLE IF NOT EXISTS positions (
             position TEXT NOT NULL,
             comment TEXT,
+            manual_evaluation REAL,
+            name TEXT,
             PRIMARY KEY (position)
         )""")
 
@@ -1157,7 +1181,13 @@ class Database:
                                 fen,
                                 1
                              ))
-    
+            
+    def add_position_features(self, board: chess.Board):
+        """Adds raw position related features to the database. Things like how many pieces are on the board, who's turn it is, who has castling rights etc."""
+        # This might be quite slow but I want to extract as much stuff as I can as potential future modelling features.
+        raise NotImplementedError()
+        
+        
     def add_game(self, game: chess.pgn.Game):
         """
         Adds a game to the game table.
