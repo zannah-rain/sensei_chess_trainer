@@ -3,7 +3,7 @@ from typing import List
 
 
 class PrincipalVariation:
-    handleable_keys = ("string", "depth", "seldepth", "multipv", "score", "nodes", "nps", "hashfull", "tbhits", "time", "pv")
+    handleable_keys = ("string", "depth", "seldepth", "multipv", "score", "nodes", "nps", "hashfull", "tbhits", "time", "pv", "currmove", "currmovenumber")
     def __init__(self,
                     info_dict: chess.engine.InfoDict) -> None:
         assert len(set(info_dict.keys()) - set(self.handleable_keys)) == 0, "Unhandled key in engine evaluation InfoDict"
@@ -16,6 +16,20 @@ class PrincipalVariation:
         if "pv" not in self.raw_info_dict.keys():
             return None
         return self.raw_info_dict["pv"]
+    
+    @property
+    def currmove(self) -> chess.Move:
+        """Don't know, not returned very often at all"""
+        if "currmove" not in self.raw_info_dict.keys():
+            return None
+        return self.raw_info_dict["currmove"]
+    
+    @property
+    def currmovenumber(self) -> chess.Move:
+        """Don't know, not returned very often at all"""
+        if "currmovenumber" not in self.raw_info_dict.keys():
+            return None
+        return self.raw_info_dict["currmovenumber"]
 
     @property
     def time(self) -> float:
