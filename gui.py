@@ -146,6 +146,8 @@ class EasyChessGui:
         self.text_output_alltime_puzzles = None
         self.tab_container = None
         self.text_io_review_comment = None
+        self.text_io_review_evaluation = None
+        self.table_output_moves = None
 
         # Puzzle stuff
         self._current_puzzle: Puzzle = None
@@ -237,6 +239,8 @@ class EasyChessGui:
     
     @property
     def turn(self) -> bool:
+        if self.game_node is None:
+            return None
         return self.game_node.turn()  # Does NOT account for mirroring, this is the underlying value that can be fed to engines etc
     
     @property
@@ -336,11 +340,41 @@ class EasyChessGui:
             Average puzzle new eval loss: {ifnone(stats["average_practice_eval_loss_alltime"], 0):.3f}
             Times a practiced positions has occurred in a real game: {stats["times_practiced_positions_seen_in_real_games"]}"""))
         self.text_io_review_comment.update(self.review_comment)
+        self.table_output_moves.update(values=self.moves_table.values.tolist())
+        
+        if self.review_evaluation is not None:
+            review_eval_str = str(self.review_evaluation)
+        else:
+            review_eval_str = ""
+
+        self.text_io_review_evaluation.update(review_eval_str, select=False)
+
+        if self.position_name is not None:
+            position_name_str = self.position_name
+        else:
+            position_name_str = ""
+
+        self.text_io_review_name.update(position_name_str, select=False)
+            
 
     @property
     def review_comment(self) -> str:
         """The review comment of the current position"""
         return self.database.get_position_comment(position=self.position)
+    
+    @property
+    def position_name(self) -> str:
+        """The name of the current position"""
+        x = self.database.get_position_name(position=self.position)
+        if x is None:
+            return ""
+        return x
+    
+    @property
+    def review_evaluation(self) -> str:
+        """The manual evaluation of the current position"""
+        x = self.database.get_position_manual_evaluation(position=self.position)
+        return x
 
     @property
     def position(self) -> str:
@@ -702,6 +736,21 @@ class EasyChessGui:
         return window_read_result
     
     @property
+    def legal_moves(self) -> chess.LegalMoveGenerator:
+        if self.board is None:
+            return list()
+        return self.board.legal_moves
+    
+    @property
+    def legal_next_boards(self) -> Dict[chess.Move, chess.Board]:
+        """A dictionary of all legal moves, the key is the chess.Move and the value is the resulting Board."""
+        x = dict()
+        for this_move in self.legal_moves:
+            x[this_move] = self.board
+            x[this_move].push(this_move)
+        return x
+    
+    @property
     def moves(self) -> Dict[chess.Move, chess.pgn.ChildNode]:
         """Return a dict of all sub-variations from this position, keyed by the move that results in them."""
         return {i.move: i for i in self.game_node.variations}
@@ -787,9 +836,15 @@ class EasyChessGui:
         self.text_output_today_puzzles = sg.Text()
         self.text_output_alltime_games = sg.Text()
         self.text_output_alltime_puzzles = sg.Text()
-        self.text_io_review_comment = sg.Multiline(default_text=self.review_comment, size=(None,20), change_submits=True, key="review_comment_key", expand_x=True, expand_y=True)
+        self.text_io_review_comment = sg.Multiline(default_text=self.review_comment, size=(None,20), auto_refresh=True, key="review_comment_key", expand_x=True, expand_y=True)
+        self.text_io_review_evaluation = sg.Input(default_text=self.review_evaluation, key="review_manual_evaluation_key")
+        self.text_io_review_name = sg.Input(default_text=self.position_name, key="position_name_key")
 
-        main_layout = [[sg.Frame("Position Info", [[self.text_output_board_date_seen],
+        moves_table = self.moves_table
+        self.table_output_moves = sg.Table(values=moves_table.values.tolist(), headings=moves_table.columns.tolist())
+
+        main_layout = [[sg.Frame("Position Info", [[sg.Text(text="Position Name:"), self.text_io_review_name],
+                                                   [self.text_output_board_date_seen],
                                                    [self.text_output_board_eval_stockfish],
                                                    [self.text_output_board_eval_leela]])]]
         puzzle_layout = [[sg.Frame("Puzzle Info", [
@@ -810,7 +865,9 @@ class EasyChessGui:
                                                            [self.text_output_today_puzzles]])]]
         alltime_layout = [[sg.Frame(title="Games", layout=[[self.text_output_alltime_games]])],
                           [sg.Frame(title="Puzzles", layout=[[self.text_output_alltime_puzzles]])]]
-        review_layout = [[sg.Frame(title="Comment", layout=[[self.text_io_review_comment]])]]
+        review_layout = [[sg.Text("Manual Evaluation:"), self.text_io_review_evaluation],
+                         [sg.Frame(title="Comment", layout=[[self.text_io_review_comment]])]]
+        moves_layout = [[sg.Frame(title="Moves", layout=[[self.table_output_moves]])]]
 
         # l1 is the layout for tab1
         # l2 is the layout for tab2
@@ -819,7 +876,8 @@ class EasyChessGui:
         tab_today=sg.Tab("Today", today_layout, key="today_tab")
         tab_alltime=sg.Tab("All-Time", alltime_layout, key="alltime_tab")
         tab_review=sg.Tab("Review", review_layout, key="review_tab")
-        self.tab_container = sg.TabGroup([[tab_puzzles, tab_main, tab_today, tab_alltime, tab_review]])
+        tab_moves=sg.Tab("Moves", moves_layout, key="moves_tab")
+        self.tab_container = sg.TabGroup([[tab_puzzles, tab_main, tab_today, tab_alltime, tab_review, tab_moves]])
         # This titlegroup object may be further used
         # in the row of the main layout.
 
@@ -860,6 +918,22 @@ class EasyChessGui:
             if value["review_comment_key"] != self.review_comment:
                 self.database.set_position_comment(position=self.position, comment=value["review_comment_key"])
 
+            if value["review_manual_evaluation_key"] != "":
+                new_manual_eval = float(value["review_manual_evaluation_key"])
+            else:
+                new_manual_eval = None
+
+            if new_manual_eval != self.review_evaluation:
+                self.database.set_position_manual_evaluation(position=self.position, manual_evaluation=new_manual_eval)
+
+            if value["position_name_key"] != "":
+                new_position_name = value["position_name_key"]
+            else:
+                new_position_name = ""
+
+            if new_position_name != self.position_name:
+                self.database.set_position_name(position=self.position, name=new_position_name)
+
             window_read_result = self.get_human_move(window_read_result=window_read_result)
             if window_read_result is None:
                 continue
@@ -888,10 +962,10 @@ class EasyChessGui:
 
                             # Want to move at least 5% towards the best move to consider myself 'improving' (otherwise 'success' can mean going from 99.9% loss to 99.8% when there's a way out)
                             if self.current_puzzle.whose_turn == chess.WHITE:
-                                # At least 5% improvement on last try if not the best move
-                                goal_eval = max(self.current_puzzle.latest_practice_eval, self.current_puzzle.latest_real_eval) * 0.95 + self.current_puzzle.evaluation * 0.05
-                                # At most 10% evaluation loss against best move
-                                goal_eval = max(goal_eval, self.current_puzzle.evaluation - 0.1)
+                                # At least 10% improvement on last try if not the best move
+                                goal_eval = max(self.current_puzzle.latest_practice_eval, self.current_puzzle.latest_real_eval) * 0.9 + self.current_puzzle.evaluation * 0.1
+                                # At most 20% evaluation loss against best move
+                                goal_eval = max(goal_eval, self.current_puzzle.evaluation - 0.2)
                                 # Always success if within 1% evaluation of best move (at least while engine evaluations aren't so reliable cos I want them fast)
                                 goal_eval = min(goal_eval, self.current_puzzle.evaluation - 0.01)
                                 if (new_eval >= goal_eval):
@@ -899,8 +973,8 @@ class EasyChessGui:
                                 else:
                                     puzzle_fail()
                             else:
-                                goal_eval = min(self.current_puzzle.latest_practice_eval, self.current_puzzle.latest_real_eval) * 0.95 + self.current_puzzle.evaluation * 0.05
-                                goal_eval = min(goal_eval, self.current_puzzle.evaluation + 0.1)
+                                goal_eval = min(self.current_puzzle.latest_practice_eval, self.current_puzzle.latest_real_eval) * 0.9 + self.current_puzzle.evaluation * 0.1
+                                goal_eval = min(goal_eval, self.current_puzzle.evaluation + 0.2)
                                 goal_eval = max(goal_eval, self.current_puzzle.evaluation + 0.01)
                                 if (new_eval <= goal_eval):
                                     puzzle_success()
@@ -997,6 +1071,40 @@ class EasyChessGui:
             if button == "Mirror":
                 self.mirrored = (self.mirrored + 1) % 2
                 continue
+    
+    @property
+    def moves_table(self) -> DataFrame:
+        # Get stats for each possible resulting position
+        x = []
+        for this_move, this_board in self.legal_next_boards.items():
+            this_position = board_position(this_board)
+            this_move_san = self.board.san(this_move)
+            this_move_data = self.database.con.execute(f"""SELECT position,
+                                                                  times_seen
+                                                           FROM summarised_positions_seen_in_games
+                                                           WHERE position = '{this_position}'""").fetchall()
+            this_move_evaluation = self.database.con.execute(f"""SELECT manual_evaluation, name FROM positions WHERE position='{this_position}'""").fetchall()
+
+            if len(this_move_data) == 0:
+                this_move_data = [this_move_san, 0]
+            else:
+                this_move_data = [this_move_san, tuple(this_move_data[0])[1]]
+            
+            if len(this_move_evaluation) == 0:
+                this_move_evaluation = [None, None]
+            else:
+                this_move_evaluation = [*tuple(this_move_evaluation[0])]
+            
+            x.append(this_move_data+this_move_evaluation)
+
+        output = pd.DataFrame(x, columns=["move", "times_seen", "my_evaluation", "name"])
+        output = output[["move", "my_evaluation", "name", "times_seen"]]
+        if self.turn is not None:
+            output = output.sort_values("my_evaluation", ascending=bool(1 - self.turn))
+        output["my_evaluation"] = output["my_evaluation"].astype(str).fillna("").replace("nan", "")
+        output["name"] = output["name"].fillna("")
+
+        return output
 
 
 def main():
