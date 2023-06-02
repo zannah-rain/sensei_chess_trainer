@@ -1073,7 +1073,7 @@ class EasyChessGui:
                 continue
     
     @property
-    def moves_table(self) -> DataFrame:
+    def moves_table(self) -> pd.DataFrame:
         # Get stats for each possible resulting position
         x = []
         for this_move, this_board in self.legal_next_boards.items():
@@ -1084,6 +1084,12 @@ class EasyChessGui:
                                                            FROM summarised_positions_seen_in_games
                                                            WHERE position = '{this_position}'""").fetchall()
             this_move_evaluation = self.database.con.execute(f"""SELECT manual_evaluation, name FROM positions WHERE position='{this_position}'""").fetchall()
+            this_move_extra_data = self.database.con.execute(f"""SELECT quality,
+                                                                        comment,
+                                                                        in_repertoire
+                                                                 FROM moves
+                                                                 WHERE position = '{self.position}'
+                                                                 AND resulting_position = '{this_position}'""").fetchall()
 
             if len(this_move_data) == 0:
                 this_move_data = [this_move_san, 0]
@@ -1094,11 +1100,16 @@ class EasyChessGui:
                 this_move_evaluation = [None, None]
             else:
                 this_move_evaluation = [*tuple(this_move_evaluation[0])]
-            
-            x.append(this_move_data+this_move_evaluation)
 
-        output = pd.DataFrame(x, columns=["move", "times_seen", "my_evaluation", "name"])
-        output = output[["move", "my_evaluation", "name", "times_seen"]]
+            if len(this_move_extra_data) == 0:
+                this_move_extra_data = ["", "", False]
+            else:
+                this_move_extra_data = [*tuple(this_move_extra_data[0])]
+            
+            x.append(this_move_data+this_move_evaluation+this_move_extra_data)
+
+        output = pd.DataFrame(x, columns=["move", "times_seen", "my_evaluation", "name", "quality", "comment", "in_repertoire"])
+        output = output[["move", "quality", "my_evaluation", "name", "comment", "in_repertoire", "times_seen"]]
         if self.turn is not None:
             output = output.sort_values("my_evaluation", ascending=bool(1 - self.turn))
         output["my_evaluation"] = output["my_evaluation"].astype(str).fillna("").replace("nan", "")
