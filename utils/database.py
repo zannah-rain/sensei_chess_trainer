@@ -603,6 +603,21 @@ class Database:
                                     total_moves = total_moves + (NEW.length / 2)
                                 WHERE time_control = NEW.time_control;
                              END""")
+        
+    def initialise_move_table(self) -> None:
+        # abstract 'move' level data (keyed by initial position, resulting position)
+        # Stuff like evaluation: ? vs ! etc
+        # A possible comment
+        # Whether or not the move is in our repertoire
+        self.con.execute("""CREATE TABLE IF NOT EXISTS moves (
+            position TEXT NOT NULL,
+            move TEXT NOT NULL,
+            resulting_position TEXT NOT NULL,
+            quality TEXT,
+            comment TEXT,
+            in_repertoire REAL NOT NULL,
+            PRIMARY KEY (position, move, resulting_position)
+        )""")
     
     def initialise_move_attempts_tables(self):
         # One to many table tracking which moves have been played in each position
@@ -738,6 +753,8 @@ class Database:
         self.initialise_time_control_tables()
 
         self.initialise_lichess_stats_tables()
+
+        self.initialise_move_table()
 
         self.con.execute(f"""CREATE TEMP VIEW move_attempt_analysis_stage_0 AS 
                              SELECT 
