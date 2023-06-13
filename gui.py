@@ -80,7 +80,7 @@ MAX_DEPTH = 1000
 
 
 menu_def_neutral = [
-        ["File", ["Open .pgn", "Build puzzles"]],
+        ["File", ["Open .pgn", "Import .pgn", "Build puzzles"]],
         ['Boar&d', ['Flip', "Mirror", 'Color', ['Brown::board_color_k',
                                       'Blue::board_color_k',
                                       'Green::board_color_k',
@@ -997,6 +997,13 @@ class EasyChessGui:
             if button == "Open .pgn":
                 with open(self.file_picker(prompt=".pgn file:")[1]["Browse"], "r") as f:
                     self.game = chess.pgn.read_game(f)
+                continue
+
+            if button == "Import .pgn":
+                with open(self.file_picker(prompt=".pgn file:")[1]["Browse"], "r") as f:
+                    this_game = chess.pgn.read_game(f)
+                    self.database.add_game(this_game)
+                self.game = this_game
                 continue
 
             if button == "Next Lesson":
