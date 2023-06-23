@@ -3,12 +3,18 @@ from typing import List
 
 
 class PrincipalVariation:
-    handleable_keys = ("string", "depth", "seldepth", "multipv", "score", "nodes", "nps", "hashfull", "tbhits", "time", "pv", "currmove", "currmovenumber")
+    handleable_keys = ("string", "depth", "seldepth", "multipv", "score", "nodes", "nps", "hashfull", "tbhits", "time", "pv", "currmove", "currmovenumber", "lowerbound")
     def __init__(self,
                     info_dict: chess.engine.InfoDict) -> None:
         assert len(set(info_dict.keys()) - set(self.handleable_keys)) == 0, "Unhandled key in engine evaluation InfoDict"
 
         self.raw_info_dict: chess.engine.InfoDict = info_dict
+
+    @property
+    def lowerbound(self) -> bool:
+        if "lowerbound" not in self.raw_info_dict.keys():
+            return None
+        return self.raw_info_dict["lowerbound"]
 
     @property
     def pv(self) -> List[chess.Move]:
