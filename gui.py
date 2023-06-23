@@ -953,8 +953,10 @@ class EasyChessGui:
                             
                             def puzzle_fail() -> None:
                                 playsound.playsound(sound="sounds//error-when-entering-the-game-menu-132111.mp3", block=False)
+                                logging.info(f"FAIL:: Target Eval ({goal_eval}) - Your Eval ({new_eval})")
                             def puzzle_success() -> None:
                                 playsound.playsound(sound="sounds//success-1-6297.mp3", block=False)
+                                logging.info(f"SUCCESS:: Target Eval ({goal_eval}) - Your Eval ({new_eval})")
 
                             self.play_move(move=window_read_result)
 

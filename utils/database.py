@@ -585,7 +585,7 @@ class Database:
             total_moves REAL NOT NULL,  -- A half move is .5
             average_n_moves REAL AS (IFNULL(total_moves / total_games, 0)) STORED NOT NULL,
             average_total_time_seconds REAL AS (IFNULL(bank_seconds + (increment_seconds * (total_moves / total_games)), 0)) STORED NOT NULL,
-            average_seconds_per_move REAL AS (IFNULL(increment_seconds + (bank_seconds * total_moves / total_games), 0)) STORED NOT NULL
+            average_seconds_per_move REAL AS (IFNULL(increment_seconds + (bank_seconds / (total_moves / total_games)), 0)) STORED NOT NULL
         )""")
         self.con.execute("""CREATE TRIGGER IF NOT EXISTS time_control_summary_row_initialiser
                             AFTER INSERT ON time_controls
