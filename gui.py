@@ -1039,8 +1039,14 @@ class EasyChessGui:
                 continue
 
             if button == "Time Controls":
-                time_control_table = pd.DataFrame(self.database.con.execute("SELECT time_control, total_games, average_n_moves, average_total_time_seconds, average_seconds_per_move FROM time_controls_summary").fetchall(),
-                                          columns=["time_control", "total_games", "average_n_moves", "average_total_time_seconds", "average_seconds_per_move"]).sort_values("total_games", ascending=False)
+                time_control_table = pd.DataFrame(self.database.con.execute("SELECT time_control, total_games, average_n_moves, average_total_time_seconds, average_seconds_per_move, bank_seconds, increment_seconds FROM time_controls_summary").fetchall(),
+                                          columns=["time_control", "total_games", "average_n_moves", "average_total_time_seconds", "average_seconds_per_move", "bank_seconds", "increment_seconds"]).sort_values("total_games", ascending=False)
+                time_control_percentiles = pd.DataFrame(self.database.con.execute("SELECT time_control, length/2 AS half_moves FROM games").fetchall(),
+                                                        columns=["time_control", "95%_n_moves"]).groupby("time_control")["95%_n_moves"].quantile(.95)
+                time_control_table = pd.merge(time_control_table, time_control_percentiles, how="left", on="time_control")
+                time_control_table["95%_total_time_seconds"] = time_control_table["bank_seconds"].replace("", "0").astype(int) + time_control_table["increment_seconds"].replace("-", "0").astype(int) * time_control_table["95%_n_moves"]
+                time_control_table["95%_seconds_per_move"] = time_control_table["95%_total_time_seconds"] / time_control_table["95%_n_moves"]
+                time_control_table[["average_n_moves", "average_total_time_seconds", "average_seconds_per_move", "95%_n_moves", "95%_total_time_seconds", "95%_seconds_per_move"]] = time_control_table[["average_n_moves", "average_total_time_seconds", "average_seconds_per_move", "95%_n_moves", "95%_total_time_seconds", "95%_seconds_per_move"]].round(2)
                 self.popup_display_table(popup_title="Time Control Data",
                                          data=time_control_table)
                 continue
