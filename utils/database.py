@@ -794,7 +794,7 @@ class Database:
         self.con.execute(f"""CREATE TEMP VIEW move_attempt_analysis AS
                              SELECT
                                 *,
-                                (latest_real_eval_loss + latest_practice_eval_loss) * (MIN(latest_real_time_taken_seconds, 90) + MIN(latest_practice_time_taken_seconds, 90)) * times_seen_in_real_games * days_since_last_practiced / days_since_last_seen AS priority
+                                (latest_real_eval_loss + latest_practice_eval_loss) * (MIN(latest_real_time_taken_seconds, 90) + MIN(latest_practice_time_taken_seconds, 90)) * times_seen_in_real_games * days_since_last_practiced / (days_since_last_seen * days_since_last_seen) AS priority
                              FROM move_attempt_analysis_stage_0
                              ORDER BY priority DESC""")
         
