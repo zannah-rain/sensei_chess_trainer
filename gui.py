@@ -294,7 +294,7 @@ class EasyChessGui:
             leela_eval = 1 - leela_eval
         
         self.text_output_board_eval_stockfish.update(f"Stockfish evaluation: {stockfish_eval}")
-        self.text_output_board_eval_leela.update(f"Leela evaluation: {stockfish_eval}")
+        self.text_output_board_eval_leela.update(f"Leela evaluation: {leela_eval}")
              
         if self.current_puzzle is not None:
             self.text_output_puzzle_priority.update(f"Review Priority: {self.current_puzzle.priority}")
