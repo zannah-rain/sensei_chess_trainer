@@ -269,6 +269,16 @@ class EasyChessGui:
             turn_text = "Black to play"
         if self.mirrored:
             turn_text += " (Mirrored puzzle)"
+        if self.board_perspective == chess.WHITE:
+            if not self.mirrored:
+                turn_text += " (White's perspective)"
+            else:
+                turn_text += " (Black's perspective)"
+        else:
+            if not self.mirrored:
+                turn_text += " (Black's perspective)"
+            else:
+                turn_text += " (White's perspective)"
         self.text_output_whose_turn.update(turn_text)
 
         last_seen = self.database.position_last_played(gamenode_position(value))
