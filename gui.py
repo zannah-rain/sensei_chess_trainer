@@ -325,6 +325,24 @@ class EasyChessGui:
         else:
             self.text_output_puzzle_priority.update(f"No puzzle loaded.")
 
+        self.text_io_review_comment.update(self.review_comment)
+        self.table_output_moves.update(values=self.moves_table.values.tolist())
+        
+        if self.review_evaluation is not None:
+            review_eval_str = str(self.review_evaluation)
+        else:
+            review_eval_str = ""
+
+        self.text_io_review_evaluation.update(review_eval_str, select=False)
+
+        if self.position_name is not None:
+            position_name_str = self.position_name
+        else:
+            position_name_str = ""
+
+        self.text_io_review_name.update(position_name_str, select=False)
+    
+    def refresh_stats_tab(self) -> None:
         stats = dict(self.database.con.execute("SELECT * FROM move_stats").fetchall()[0])
         self.progress_output_today_study.update(stats["positions_practiced_today"] / (max(stats["total_half_moves_from_real_games_today"], 10) // 2))
         self.progress_output_puzzles_study.update(stats["positions_practiced_today"] / (max(stats["total_half_moves_from_real_games_today"], 10) // 2))
@@ -350,23 +368,6 @@ class EasyChessGui:
             Average puzzle original eval loss: {ifnone(stats["average_real_eval_loss_in_practiced_positions"], 0):.3f}
             Average puzzle new eval loss: {ifnone(stats["average_practice_eval_loss_alltime"], 0):.3f}
             Times a practiced positions has occurred in a real game: {stats["times_practiced_positions_seen_in_real_games"]}"""))
-        self.text_io_review_comment.update(self.review_comment)
-        self.table_output_moves.update(values=self.moves_table.values.tolist())
-        
-        if self.review_evaluation is not None:
-            review_eval_str = str(self.review_evaluation)
-        else:
-            review_eval_str = ""
-
-        self.text_io_review_evaluation.update(review_eval_str, select=False)
-
-        if self.position_name is not None:
-            position_name_str = self.position_name
-        else:
-            position_name_str = ""
-
-        self.text_io_review_name.update(position_name_str, select=False)
-            
 
     @property
     def review_comment(self) -> str:
@@ -873,7 +874,8 @@ class EasyChessGui:
                          [RoundedButton("Next Puzzle", corner_radius=1, border_width=0)]]
         today_layout = [[sg.Frame(title="Games", layout=[[self.text_output_today_games]])],
                         [sg.Frame(title="Puzzles", layout=[[self.progress_output_today_study],
-                                                           [self.text_output_today_puzzles]])]]
+                                                           [self.text_output_today_puzzles]])],
+                        [RoundedButton("Refresh", corner_radius=1, border_width=0, key="refresh_stats_tab")]]
         alltime_layout = [[sg.Frame(title="Games", layout=[[self.text_output_alltime_games]])],
                           [sg.Frame(title="Puzzles", layout=[[self.text_output_alltime_puzzles]])]]
         review_layout = [[sg.Text("Manual Evaluation:"), self.text_io_review_evaluation],
@@ -1099,6 +1101,13 @@ class EasyChessGui:
             if button == "Mirror":
                 self.mirrored = (self.mirrored + 1) % 2
                 continue
+
+            if button == "refresh_stats_tab":
+                self.refresh_stats_tab()
+                continue
+
+            if button != "__TIMEOUT__":
+                print(f"Button press: {button}")
     
     @property
     def moves_table(self) -> pd.DataFrame:
