@@ -65,6 +65,7 @@ import pandas as pd
 from utils.promotion_select_window import select_promotion_piece
 from textwrap import dedent
 from io import StringIO
+from utils.gui import RoundedButton
 
 logging.basicConfig(level=logging.INFO)
 
@@ -869,7 +870,7 @@ class EasyChessGui:
                                                    [self.text_output_puzzle_latest_attempt_move],
                                                    [self.text_output_puzzle_latest_attempt_evaluation],
                                                    [self.text_output_puzzle_latest_evaluation_loss]])],
-                         [sg.Button("Next Lesson")]]
+                         [RoundedButton("Next Puzzle", corner_radius=1, border_width=0)]]
         today_layout = [[sg.Frame(title="Games", layout=[[self.text_output_today_games]])],
                         [sg.Frame(title="Puzzles", layout=[[self.progress_output_today_study],
                                                            [self.text_output_today_puzzles]])]]
@@ -897,8 +898,8 @@ class EasyChessGui:
                  sg.VSeparator(), 
                  sg.Column([[self.text_output_whose_turn],
                             [self.tab_container],
-                            [sg.Button("Engine Move")],
-                            [sg.Button("<-"), sg.Button("->")]])]
+                            [RoundedButton("Engine Move", corner_radius=1, border_width=0)],
+                            [RoundedButton("<-", corner_radius=1, border_width=0), RoundedButton("->", corner_radius=1, border_width=0)]])]
         ]
 
         return layout
