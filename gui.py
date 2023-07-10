@@ -252,7 +252,6 @@ class EasyChessGui:
     @game_node.setter
     def game_node(self, value: chess.pgn.GameNode):
         # Update Board
-        self.redraw_board()
         self._game_node = value
         self._psg_board = self.fen_to_psg_board()
         self.redraw_board()
