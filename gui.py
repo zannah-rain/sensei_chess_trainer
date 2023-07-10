@@ -149,6 +149,7 @@ class EasyChessGui:
         self.text_io_review_comment = None
         self.text_io_review_evaluation = None
         self.table_output_moves = None
+        self.console_output = None
 
         # Puzzle stuff
         self._current_puzzle: Puzzle = None
@@ -196,7 +197,7 @@ class EasyChessGui:
     
     def stockfish(self) -> Engine:
         if self._stockfish is None:
-            logging.info("Starting Stockfish")
+            print("Starting Stockfish")
             self._stockfish = Engine(engine=chess.engine.SimpleEngine.popen_uci(self.settings["Stockfish Executable"]), 
                                      name="stockfish",
                                      depth_parameter="depth")
@@ -207,7 +208,7 @@ class EasyChessGui:
 
     def leela(self) -> Engine:
         if self._leela is None:
-            logging.info("Starting Leela")
+            print("Starting Leela")
             self._leela = Engine(engine=chess.engine.SimpleEngine.popen_uci(self.settings["Leela Executable"]), 
                                  name="leela",
                                  depth_parameter="nodes")
@@ -421,7 +422,6 @@ class EasyChessGui:
     @mirrored.setter
     def mirrored(self, value) -> None:
         if value != self.mirrored:
-            logging.info(f"Setting .mirrored to {value}")
             self._mirrored = value
             self.create_new_window()
             self.game_node = self.game_node
@@ -526,7 +526,7 @@ class EasyChessGui:
                 pc = board.piece_at(s^56)
             except Exception:
                 pc = None
-                logging.exception('Failed to get piece.')
+                print('Failed to get piece.')
 
             if pc is not None:
                 pt = pc.piece_type
@@ -645,8 +645,7 @@ class EasyChessGui:
 
             # If user pressed x we set the promo to queen
             if psg_promo is None:
-                logging.info('User did not select a promotion piece, '
-                             'set this to queen.')
+                print('User did not select a promotion piece, defaulted to queen.')
                 psg_promo = QUEENW if stm else QUEENB
 
             pyc_promo = promote_psg_to_pyc[psg_promo]
@@ -854,6 +853,8 @@ class EasyChessGui:
         moves_table = self.moves_table
         self.table_output_moves = sg.Table(values=moves_table.values.tolist(), headings=moves_table.columns.tolist())
 
+        self.console_output = sg.Multiline(reroute_stdout=True, reroute_cprint=True, reroute_stderr=True, expand_x=True, expand_y=True, autoscroll=True)
+
         main_layout = [[sg.Frame("Position Info", [[sg.Text(text="Position Name:"), self.text_io_review_name],
                                                    [self.text_output_board_date_seen],
                                                    [self.text_output_board_eval_stockfish],
@@ -879,6 +880,7 @@ class EasyChessGui:
         review_layout = [[sg.Text("Manual Evaluation:"), self.text_io_review_evaluation],
                          [sg.Frame(title="Comment", layout=[[self.text_io_review_comment]])]]
         moves_layout = [[sg.Frame(title="Moves", layout=[[self.table_output_moves]])]]
+        console_layout = [[self.console_output]]
 
         # l1 is the layout for tab1
         # l2 is the layout for tab2
@@ -888,7 +890,8 @@ class EasyChessGui:
         tab_alltime=sg.Tab("All-Time", alltime_layout, key="alltime_tab")
         tab_review=sg.Tab("Review", review_layout, key="review_tab")
         tab_moves=sg.Tab("Moves", moves_layout, key="moves_tab")
-        self.tab_container = sg.TabGroup([[tab_puzzles, tab_main, tab_today, tab_alltime, tab_review, tab_moves]])
+        tab_console=sg.Tab("Console", console_layout, key="console_tab")
+        self.tab_container = sg.TabGroup([[tab_puzzles, tab_main, tab_today, tab_alltime, tab_review, tab_moves, tab_console]])
         # This titlegroup object may be further used
         # in the row of the main layout.
 
@@ -964,10 +967,10 @@ class EasyChessGui:
                             
                             def puzzle_fail() -> None:
                                 playsound.playsound(sound="sounds//error-when-entering-the-game-menu-132111.mp3", block=False)
-                                logging.info(f"FAIL:: Target Eval ({goal_eval}) - Your Eval ({new_eval})")
+                                print(f"FAIL:: Target Eval ({goal_eval}) - Your Eval ({new_eval})")
                             def puzzle_success() -> None:
                                 playsound.playsound(sound="sounds//success-1-6297.mp3", block=False)
-                                logging.info(f"SUCCESS:: Target Eval ({goal_eval}) - Your Eval ({new_eval})")
+                                print(f"SUCCESS:: Target Eval ({goal_eval}) - Your Eval ({new_eval})")
 
                             self.play_move(move=window_read_result)
 
@@ -1077,12 +1080,12 @@ class EasyChessGui:
                 if next_node is not None:
                     self.game_node = next_node
                 else:
-                    logging.info("End of game")
+                    print("End of game")
                 continue
 
             if button == "<-":
                 if not isinstance(self.game_node, chess.pgn.ChildNode):
-                    logging.warning("Can't get parent node of non-ChildNode game_node")
+                    print("Can't get parent node of non-ChildNode game_node")
                     continue
                 
                 prev_node = self.game_node.parent
