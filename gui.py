@@ -493,6 +493,9 @@ class EasyChessGui:
 
         self.window = w
 
+        self.window.bind("<Right>", "right_arrow_key")
+        self.window.bind("<Left>", "left_arrow_key")
+
         self.redraw_board()
     
     def file_picker(self, prompt) -> Path:
@@ -1076,7 +1079,7 @@ class EasyChessGui:
                 continue
                 
 
-            if button == "->":
+            if (button == "->") or (button == "right_arrow_key"):
                 next_node = self.game_node.next()
                 if next_node is not None:
                     self.game_node = next_node
@@ -1084,7 +1087,7 @@ class EasyChessGui:
                     print("End of game")
                 continue
 
-            if button == "<-":
+            if (button == "<-") or (button == "left_arrow_key"):
                 if not isinstance(self.game_node, chess.pgn.ChildNode):
                     print("Can't get parent node of non-ChildNode game_node")
                     continue
