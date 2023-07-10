@@ -121,7 +121,7 @@ class EasyChessGui:
                                  settings_screen_title="Sensei Settings:")
 
         self.theme: str = theme
-        self.gui_theme: str = 'Reddit'
+        self.gui_theme: str = theme
         
         self.menu_elem = None
         self.username: str = 'Acolyte Zoe'
@@ -1145,7 +1145,7 @@ class EasyChessGui:
 
 
 def main():
-    theme = 'Reddit'
+    theme = 'LightGrey1'
 
 
     pecg = EasyChessGui(theme)
