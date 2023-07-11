@@ -874,7 +874,7 @@ class EasyChessGui:
                                                    [self.text_output_puzzle_latest_attempt_move],
                                                    [self.text_output_puzzle_latest_attempt_evaluation],
                                                    [self.text_output_puzzle_latest_evaluation_loss]])],
-                         [RoundedButton("Next Puzzle", corner_radius=1, border_width=0)]]
+                         [RoundedButton("Next Lesson", corner_radius=1, border_width=0)]]
         today_layout = [[sg.Frame(title="Games", layout=[[self.text_output_today_games]])],
                         [sg.Frame(title="Puzzles", layout=[[self.progress_output_today_study],
                                                            [self.text_output_today_puzzles]])],
