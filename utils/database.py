@@ -52,7 +52,7 @@ class Database:
         r = requests.get(query_url)
         time.sleep(1)
         if r.status_code == 429:
-            logging.info(f"Hit Lichess stats API rate limit, making no more requests and waiting to avoid restart oopsies")
+            print(f"Hit Lichess stats API rate limit, making no more requests and waiting to avoid restart oopsies")
             time.sleep(60)
             globals.explorer_limit = True
             return None
@@ -133,7 +133,7 @@ class Database:
                                      white_wins,
                                      draws,
                                      black_wins))
-                logging.info(f"Added lichess amateur stats for fen {fen}, speed {this_speed}, rating band {this_rating_band}")
+                print(f"Added lichess amateur stats for fen {fen}, speed {this_speed}, rating band {this_rating_band}")
 
         def master_api(fen: str,
                        topGames: int = 0,
@@ -186,7 +186,7 @@ class Database:
                              white_wins,
                              draws,
                              black_wins))
-        logging.info(f"Added lichess master stats for fen {fen}")
+        print(f"Added lichess master stats for fen {fen}")
 
         if commit:
             self.con.commit()
@@ -1049,7 +1049,7 @@ class Database:
             board = chess.Board(fen=fen)
             if board.is_valid():
                 self.engine_evaluation(board=board, engine=engine, depth_value=depth_value, commit=False)
-                logging.info(f"{engine.name} evaluation done! {n} / {len(positions_to_evaluate)}")
+                print(f"{engine.name} evaluation done! {n} / {len(positions_to_evaluate)}")
                 if n % 100 == 0:
                     self.con.commit()
         
@@ -1214,7 +1214,7 @@ class Database:
         game_name: str = f"{game.headers['White']} vs {game.headers['Black']} ({game.headers['UTCDate']})"
 
         if self.con.execute(f"SELECT 1 FROM games WHERE white=? AND black=? AND timestamp=?", (game.headers["White"], game.headers["Black"], timestamp)).fetchone() is not None:
-            logging.info(f"Not adding game as already in database: {game_name}")
+            print(f"Not adding game as already in database: {game_name}")
             return False
 
         self.con.execute("INSERT INTO games (white,black,event,link,timestamp,result,time_control,variant,pgn,length) VALUES(?,?,?,?,?,?,?,?,?,?)",
@@ -1254,7 +1254,7 @@ class Database:
             current_position = gamenode_position(current_game_node)
             next_game_node = current_game_node.next()
         
-        logging.info(f"Added game to db: {game_name}")
+        print(f"Added game to db: {game_name}")
 
         return True
     
@@ -1279,19 +1279,19 @@ class Database:
                 else:
                     continue
         except ChunkedEncodingError:
-            logging.info("Connection broken by host (ChunkedEncodingError)")
+            print("Connection broken by host (ChunkedEncodingError)")
 
         if games_added > 0:
             self.con.commit()
-            logging.info(f"Added {games_added} games to the database.")
+            print(f"Added {games_added} games to the database.")
         else:
-            logging.info(f"No new games found.")
+            print(f"No new games found.")
 
         self.log_db_stats()
 
     def log_db_stats(self):
         def print_info(table):
-            logging.info(f"{self.con.execute(f'SELECT COUNT(*) FROM {table}').fetchone()} rows in {table}")
+            print(f"{self.con.execute(f'SELECT COUNT(*) FROM {table}').fetchone()[0]} rows in {table}")
         
         for i in ["games", "positions", "combined_engine_evaluation", "stockfish_evaluations", "leela_evaluations", "positions_seen_in_games", "move_attempts", "fens", "fen_stats"]:
             print_info(i)
@@ -1345,7 +1345,6 @@ class Database:
 # import chess.pgn
 # import json
 # import pathlib
-# import logging
 # import requests
 # import time
 # from datetime import datetime
@@ -1354,7 +1353,6 @@ class Database:
 # from globals import username
 # 
 # 
-# logging.basicConfig(level=logging.INFO)
 # 
 # 
 # class zPosition:
