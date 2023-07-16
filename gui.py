@@ -89,7 +89,7 @@ menu_def_neutral = [
                     'Theme', GUI_THEME
                    ]
         ],
-        ["Data", ["Time Controls", "Games", "Stats"]],
+        ["Data", ["Time Controls", "Games", "Stats", "Puzzles"]],
         ["Lichess", ["Download all lichess .pgn's", "Download 1 lichess .pgn", "Download this positions lichess stats"]],
         ['&Time', ['User::tc_k', 'Engine::tc_k']],
         ['&Settings', ['Game::settings_game_k']],
@@ -462,7 +462,7 @@ class EasyChessGui:
     def popup_display_table(self, popup_title: str, data: pd.DataFrame) -> None:
         """Display a table of data in a pop up window"""
 
-        popup_layout = [[sg.Table(values=data.values.tolist(), headings=data.columns.tolist())],
+        popup_layout = [[sg.Table(values=data.values.tolist(), headings=data.columns.tolist(), def_col_width=15, auto_size_columns=False)],
                                [sg.Ok()]]
 
         popup_window = sg.Window(title=popup_title,
@@ -874,7 +874,7 @@ class EasyChessGui:
                                                    [self.text_output_puzzle_latest_attempt_move],
                                                    [self.text_output_puzzle_latest_attempt_evaluation],
                                                    [self.text_output_puzzle_latest_evaluation_loss]])],
-                         [RoundedButton("Next Lesson", corner_radius=1, border_width=0)]]
+                         [RoundedButton("Next Puzzle", corner_radius=1, border_width=0)]]
         today_layout = [[sg.Frame(title="Games", layout=[[self.text_output_today_games]])],
                         [sg.Frame(title="Puzzles", layout=[[self.progress_output_today_study],
                                                            [self.text_output_today_puzzles]])],
@@ -1026,7 +1026,7 @@ class EasyChessGui:
                 self.game = this_game
                 continue
 
-            if button == "Next Lesson":
+            if button == "Next Puzzle":
                 self.current_puzzle = self.database.highest_priority_puzzle()
                 # Randomise perspective to hopefully help learning
                 self.randomise_perspective_and_mirroring()
@@ -1067,6 +1067,41 @@ class EasyChessGui:
                                                         data=game_table.drop(columns=["pgn"]))
                 if popup_result[1][0] is not None:
                     self.game_node = chess.pgn.read_game(StringIO(game_table.iloc[popup_result[1][0][0], :]["pgn"]))
+                continue
+
+            if button == "Puzzles":
+                puzzle_table = pd.DataFrame(data=self.database.con.execute("""
+                                                                           SELECT 
+                                                                                position, 
+                                                                                latest_real_time_control, 
+                                                                                initial_eval,
+                                                                                latest_real_eval_loss,
+                                                                                latest_practice_eval_loss,
+                                                                                times_seen_in_real_games,
+                                                                                days_since_last_seen,
+                                                                                days_since_last_practiced,
+                                                                                latest_real_time_taken_seconds,
+                                                                                latest_practice_time_taken_seconds,
+                                                                                times_practiced,
+                                                                                priority
+                                                                           FROM move_attempt_analysis
+                                                                           LIMIT 5000""").fetchall(),
+                                            columns=["position", 
+                                                     "latest_real_time_control", 
+                                                     "initial_eval", 
+                                                     "latest_real_eval_loss", 
+                                                     "latest_practice_eval_loss", 
+                                                     "times_seen_in_real_games",
+                                                     "days_since_last_seen",
+                                                     "days_since_last_practiced",
+                                                     "latest_real_time_taken_seconds",
+                                                     "latest_practice_time_taken_seconds",
+                                                     "times_practiced",
+                                                     "priority"])
+                popup_result = self.popup_display_table(popup_title="Puzzles",
+                                                        data=puzzle_table)
+                #if popup_result[1][0] is not None:
+                #    self.game_node = chess.pgn.read_game(StringIO(game_table.iloc[popup_result[1][0][0], :]["pgn"]))
                 continue
 
             if button == "Stats":
