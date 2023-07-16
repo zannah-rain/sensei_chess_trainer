@@ -856,7 +856,7 @@ class EasyChessGui:
         moves_table = self.moves_table
         self.table_output_moves = sg.Table(values=moves_table.values.tolist(), headings=moves_table.columns.tolist())
 
-        self.console_output = sg.Multiline(reroute_stdout=True, reroute_cprint=True, reroute_stderr=True, expand_x=True, expand_y=True, autoscroll=True)
+        self.console_output = sg.Multiline(echo_stdout_stderr=True, reroute_stdout=True, reroute_cprint=True, reroute_stderr=True, expand_x=True, expand_y=True, autoscroll=True)
 
         main_layout = [[sg.Frame("Position Info", [[sg.Text(text="Position Name:"), self.text_io_review_name],
                                                    [self.text_output_board_date_seen],
