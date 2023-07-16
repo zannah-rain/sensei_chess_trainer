@@ -636,6 +636,14 @@ class Database:
             PRIMARY KEY (position, timestamp, player, real_or_practice)
         )""")
 
+        self.con.execute("""CREATE TEMP VIEW move_attempts_practice_summary AS
+            SELECT 
+                position,
+                COUNT(*) AS times_practiced
+            FROM move_attempts
+            WHERE real_or_practice = 0
+            GROUP BY position""")
+
         self.con.execute("""CREATE TABLE IF NOT EXISTS latest_real_move_attempts (
             position TEXT NOT NULL PRIMARY KEY,
             resulting_position TEXT NOT NULL,
@@ -774,13 +782,14 @@ class Database:
                                     WHEN TRUE THEN initial_evals.combined_evaluation - IFNULL(practice_evals.combined_evaluation, resulting_evals.combined_evaluation) -- WHITE
                                     WHEN FALSE THEN IFNULL(practice_evals.combined_evaluation, resulting_evals.combined_evaluation) - initial_evals.combined_evaluation -- BLACK
                                  END latest_practice_eval_loss,
-                                 positions.times_seen as times_seen_in_real_games,
+                                 IFNULL(positions.times_seen, 1) as times_seen_in_real_games,
                                  positions.latest_timestamp as last_seen_in_real_game,
                                  JULIANDAY("NOW") - JULIANDAY(positions.latest_timestamp) as days_since_last_seen,
                                  IFNULL(last_practice.timestamp, positions.latest_timestamp) as last_practiced_timestamp,
                                  JULIANDAY("NOW") - IFNULL(JULIANDAY(last_practice.timestamp), JULIANDAY(positions.latest_timestamp)) as days_since_last_practiced,
                                  IFNULL(latest_real_move_attempts.time_taken_seconds, IFNULL(time_controls_summary.average_seconds_per_move, 30)) AS latest_real_time_taken_seconds,
-                                 IFNULL(last_practice.time_taken_seconds, IFNULL(time_controls_summary.average_seconds_per_move, 30)) AS latest_practice_time_taken_seconds
+                                 IFNULL(last_practice.time_taken_seconds, IFNULL(time_controls_summary.average_seconds_per_move, 30)) AS latest_practice_time_taken_seconds,
+                                 IFNULL(practice_summary.times_practiced, 0) AS times_practiced
                              FROM latest_real_move_attempts
                              INNER JOIN combined_engine_evaluation initial_evals ON latest_real_move_attempts.position = initial_evals.position
                              INNER JOIN combined_engine_evaluation resulting_evals ON latest_real_move_attempts.resulting_position = resulting_evals.position
@@ -788,13 +797,23 @@ class Database:
                              INNER JOIN summarised_positions_seen_in_games positions ON latest_real_move_attempts.position = positions.position
                              INNER JOIN positions_metadata basic_position_data ON basic_position_data.position = latest_real_move_attempts.position
                              INNER JOIN latest_move_attempts last_practice ON latest_real_move_attempts.position = last_practice.position
+                             LEFT JOIN move_attempts_practice_summary practice_summary ON latest_real_move_attempts.position = practice_summary.position
                              LEFT JOIN time_controls_summary ON latest_real_move_attempts.time_control = time_controls_summary.time_control
                              """)
+        
+        import math
+        self.con.create_function("power", 2, math.pow)
         
         self.con.execute(f"""CREATE TEMP VIEW move_attempt_analysis AS
                              SELECT
                                 *,
-                                (latest_real_eval_loss + latest_practice_eval_loss) * (MIN(latest_real_time_taken_seconds, 90) + MIN(latest_practice_time_taken_seconds, 90)) * times_seen_in_real_games * days_since_last_practiced / (days_since_last_seen * days_since_last_seen) AS priority
+                                latest_real_eval_loss + latest_practice_eval_loss + 0.02 AS eval_loss_multiplier,
+                                MIN(latest_real_time_taken_seconds, 90) + MIN(latest_practice_time_taken_seconds, 90) + 10 AS time_taken_multiplier,
+                                power(times_seen_in_real_games + 1, 0.4) AS times_seen_multiplier,
+                                1 / (CAST(times_practiced AS FLOAT) + 1) AS times_practiced_multiplier,
+                                days_since_last_practiced + 1 AS days_since_practiced_multiplier,
+                                1 / power(days_since_last_seen + 1, 1.5) AS days_since_seen_multiplier,
+                                (latest_real_eval_loss + 0.02) * (latest_practice_eval_loss + 0.1) * (MIN(latest_real_time_taken_seconds, 90) + MIN(latest_practice_time_taken_seconds, 90) + 10) * (power(times_seen_in_real_games + 1, 0.5)) * (1 / power(CAST(times_practiced AS FLOAT) + 1, 0.5)) * (power(days_since_last_practiced + 1, 1) + 1) * (1 / power(days_since_last_seen + 1, 1)) AS priority
                              FROM move_attempt_analysis_stage_0
                              ORDER BY priority DESC""")
         
