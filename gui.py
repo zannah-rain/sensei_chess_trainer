@@ -1043,7 +1043,7 @@ class EasyChessGui:
 
             if button == "Build puzzles":
                 self.database.full_engine_evaluation(engine=self.stockfish(), depth_value=10)
-                self.database.full_engine_evaluation(engine=self.leela(), depth_value=100)
+                self.database.full_engine_evaluation(engine=self.leela(), depth_value=500)
                 continue
 
             if button == "Time Controls":
