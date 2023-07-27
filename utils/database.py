@@ -998,7 +998,11 @@ class Database:
     def latest_game_timestamp(self):
         if self.latest_game_time is None:
             return None
-        return int(datetime.datetime.strptime(self.latest_game_time, "%Y-%m-%d %H:%M:%S").timestamp() * 1000)
+        if "." in self.latest_game_time:
+            x = datetime.datetime.strptime(self.latest_game_time, "%Y-%m-%d %H:%M:%S.%f")
+        else:
+            x = datetime.datetime.strptime(self.latest_game_time, "%Y-%m-%d %H:%M:%S")
+        return int(x.timestamp() * 1000)
     
     @property
     def latest_game_time(self):
@@ -1043,7 +1047,6 @@ class Database:
     
     def log_played_position(self, board: chess.Board, white: str, black: str, timestamp: datetime.datetime):
         """Should be called ONCE for each observed position in a real game."""
-        assert (white == username) or (black == username)
         assert isinstance(timestamp, datetime.datetime)
         assert board.is_valid()
 
@@ -1229,12 +1232,32 @@ class Database:
         Adds a game to the game table.
         Note: Does not commit to allow for faster batching.
         """
-        timestamp = f"{game.headers['UTCDate']} {game.headers['UTCTime']}".replace(".", "-")
-        game_name: str = f"{game.headers['White']} vs {game.headers['Black']} ({game.headers['UTCDate']})"
+        if "UTCDate" in game.headers.keys():
+            timestamp = f"{game.headers['UTCDate']} {game.headers['UTCTime']}".replace(".", "-")
+            time_str = game.headers["UTCDate"]
+        else:
+            timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            time_str = "Unknown"
+        assert "." not in timestamp
+        game_name: str = f"{game.headers['White']} vs {game.headers['Black']} ({time_str})"
 
         if self.con.execute(f"SELECT 1 FROM games WHERE white=? AND black=? AND timestamp=?", (game.headers["White"], game.headers["Black"], timestamp)).fetchone() is not None:
             print(f"Not adding game as already in database: {game_name}")
             return False
+        
+        if self.con.execute(f"SELECT 1 FROM games WHERE pgn=?", (game.__str__(),)).fetchone() is not None:
+            print(f"Found exact .pgn match, not adding game to database: {game_name}")
+            return False
+        
+        if "TimeControl" in game.headers.keys():
+            time_control = game.headers["TimeControl"]
+        else:
+            time_control = "3600+60"  # Rough guess at 1 hour + 1 min
+
+        if "Variant" in game.headers.keys():
+            variant = game.headers["Variant"]
+        else:
+            variant = "standard"
 
         self.con.execute("INSERT INTO games (white,black,event,link,timestamp,result,time_control,variant,pgn,length) VALUES(?,?,?,?,?,?,?,?,?,?)",
                             (game.headers["White"],
@@ -1243,8 +1266,8 @@ class Database:
                             game.headers["Site"],
                             timestamp,
                             game.headers["Result"],
-                            game.headers["TimeControl"],
-                            game.headers["Variant"],
+                            time_control,
+                            variant,
                             game.__str__(),
                             len(list(game.mainline_moves()))))
         
@@ -1263,9 +1286,14 @@ class Database:
                 this_player = game.headers["White"]
             else:
                 this_player = game.headers["Black"]
-            timestamp_datetime = datetime.datetime.strptime(timestamp, "%Y-%m-%d %H:%M:%S")
+
+            if type(timestamp) == str:
+                timestamp_datetime = datetime.datetime.strptime(timestamp, "%Y-%m-%d %H:%M:%S")
+            elif type(timestamp) == datetime.datetime:
+                timestamp_datetime = timestamp
+
             self.log_played_position(board=current_game_node.board(), white=game.headers["White"], black=game.headers["Black"], timestamp=timestamp_datetime)
-            self.log_human_move(board=current_game_node.board(), timestamp=timestamp_datetime, player=this_player, move=next_game_node.move, is_real=True, time_control=game.headers["TimeControl"])
+            self.log_human_move(board=current_game_node.board(), timestamp=timestamp_datetime, player=this_player, move=next_game_node.move, is_real=True, time_control=time_control)
             self.log_human_fen(board=current_game_node.board())
             positions_saved |= {current_position}
 
