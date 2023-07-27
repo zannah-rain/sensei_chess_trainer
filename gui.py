@@ -49,7 +49,7 @@ import platform as sys_plat
 from utils.constants import *
 from utils.position import *
 from utils.puzzle import Puzzle
-from utils.engine import Engine
+from utils.engine import Engine, EngineEvaluationResult
 from zPosition import zPosition
 from pathlib import Path
 from typing import Dict
@@ -172,6 +172,8 @@ class EasyChessGui:
         
         self.game = chess.pgn.Game()
         self.game_node = self.game
+        self.game_review_mode = False
+        self._current_game_review_position_start_time: datetime.datetime = None
 
         # Tracking any short term variables in between window reads
         self.move_state = 0
@@ -220,7 +222,7 @@ class EasyChessGui:
         return self._game
     
     @game.setter
-    def game(self, value: chess.pgn.Game):
+    def game(self, value: chess.pgn.Game) -> None:
         self._game = value
         self.game_node = self.game
 
@@ -228,16 +230,22 @@ class EasyChessGui:
     def game_node(self) -> chess.pgn.GameNode:
         return self._game_node
     
-    def stockfish_evaluation(self, depth):
-        return self.database.engine_evaluation(board=self.board, engine=self.stockfish(), depth_value=depth)
+    def stockfish_evaluation(self, depth, board=None) -> EngineEvaluationResult:
+        if board is None:
+            board = self.board
+        return self.database.engine_evaluation(board=board, engine=self.stockfish(), depth_value=depth)
     
-    def leela_evaluation(self, nodes):
-        return self.database.engine_evaluation(board=self.board, engine=self.leela(), depth_value=nodes)
+    def leela_evaluation(self, nodes, board=None) -> EngineEvaluationResult:
+        if board is None:
+            board = self.board
+        return self.database.engine_evaluation(board=board, engine=self.leela(), depth_value=nodes)
     
-    def combined_evaluation(self, depth, nodes):
-        self.stockfish_evaluation(depth)
-        self.leela_evaluation(nodes)
-        return self.database.read_combined_engine_evaluation(board=self.board)
+    def combined_evaluation(self, depth, nodes, board=None) -> float:
+        if board is None:
+            board = self.board
+        self.stockfish_evaluation(depth, board=board)
+        self.leela_evaluation(nodes, board=board)
+        return self.database.read_combined_engine_evaluation(board=board)
     
     @property
     def turn(self) -> bool:
@@ -255,6 +263,8 @@ class EasyChessGui:
         self._game_node = value
         self._psg_board = self.fen_to_psg_board()
         self.redraw_board()
+
+        self._current_game_review_position_start_time = datetime.datetime.now()
 
         if isinstance(self._game_node, chess.pgn.ChildNode):
             # Has a parent node and 'move' that we can highlight
@@ -1005,6 +1015,55 @@ class EasyChessGui:
                     else:
                         self.puzzle_attempt += 1
                         self.play_move(move=window_read_result)
+                elif self.game_review_mode:
+                    # Similar to doing a puzzle, BUT
+                    # - Success = Playing a move that is good when compared with the best move and the move that was originally played in that game (not our last attempt)
+                    # - On success, the board will progress to the next board state from that game, not necessarily from the move we just played
+                    # - There are unlimited attempts to solve
+                    # Log the first attempt in the database
+                    self.database.log_human_move(board=self.board, 
+                                                 timestamp=datetime.datetime.now(), 
+                                                 player=username, 
+                                                 move=window_read_result, 
+                                                 is_real=False,
+                                                 time_taken_seconds=(datetime.datetime.now() - self._current_game_review_position_start_time).total_seconds())
+                    
+                    original_next_position = self.game_node.next()
+                    if original_next_position is None:
+                        self.play_move(move=window_read_result)
+                        continue
+                    this_attempt_next_position = self.game_node.board().copy()
+                    this_attempt_next_position.push(window_read_result)
+                    
+                    def game_review_fail() -> None:
+                        playsound.playsound(sound="sounds//error-when-entering-the-game-menu-132111.mp3", block=False)
+                        print(f"FAIL:: Target Eval ({goal_eval}) - Your Eval ({new_eval})")
+                    def game_review_success() -> None:
+                        playsound.playsound(sound="sounds//success-1-6297.mp3", block=False)
+                        print(f"SUCCESS:: Target Eval ({goal_eval}) - Your Eval ({new_eval})")
+                        self.play_move(move=original_next_position.move)
+
+                    current_eval: float = self.combined_evaluation(depth=23, nodes=5000)
+                    new_eval: float = self.combined_evaluation(depth=23, nodes=5000, board=this_attempt_next_position)
+                    original_game_eval: float = self.combined_evaluation(depth=23, nodes=5000, board=original_next_position.board())
+
+                    # Want to move at least 5% towards the best move to consider myself 'improving' (otherwise 'success' can mean going from 99.9% loss to 99.8% when there's a way out)
+                    if self.turn == chess.WHITE:
+                        # At least 10% improvement on last try if not the best move
+                        goal_eval = original_game_eval
+                        # At most 5% evaluation loss against best move
+                        goal_eval = max(goal_eval, current_eval - 0.04)
+                        if (new_eval >= goal_eval):
+                            game_review_success()
+                        else:
+                            game_review_fail()
+                    else:
+                        goal_eval = original_game_eval
+                        goal_eval = min(goal_eval, current_eval + 0.04)
+                        if (new_eval <= goal_eval):
+                            game_review_success()
+                        else:
+                            game_review_fail()
                 else:
                     self.play_move(move=window_read_result)
                 continue
@@ -1017,6 +1076,7 @@ class EasyChessGui:
             if button == "Open .pgn":
                 with open(self.file_picker(prompt=".pgn file:")[1]["Browse"], "r") as f:
                     self.game = chess.pgn.read_game(f)
+                    self.game_review_mode = True
                 continue
 
             if button == "Import .pgn":
@@ -1024,6 +1084,7 @@ class EasyChessGui:
                     this_game = chess.pgn.read_game(f)
                     self.database.add_game(this_game)
                 self.game = this_game
+                self.game_review_mode = True
                 continue
 
             if button == "Next Puzzle":
@@ -1031,6 +1092,7 @@ class EasyChessGui:
                 # Randomise perspective to hopefully help learning
                 self.randomise_perspective_and_mirroring()
                 self.game = chess.pgn.Game().from_board(chess.Board(fen=position_to_fen(self.current_puzzle.position)))
+                self.game_review_mode = False
                 continue
 
             if button == "Download all lichess .pgn's":
@@ -1066,7 +1128,8 @@ class EasyChessGui:
                 popup_result = self.popup_display_table(popup_title="Games",
                                                         data=game_table.drop(columns=["pgn"]))
                 if popup_result[1][0] is not None:
-                    self.game_node = chess.pgn.read_game(StringIO(game_table.iloc[popup_result[1][0][0], :]["pgn"]))
+                    self.game = chess.pgn.read_game(StringIO(game_table.iloc[popup_result[1][0][0], :]["pgn"]))
+                    self.game_review_mode = True
                 continue
 
             if button == "Puzzles":
