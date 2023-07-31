@@ -1039,32 +1039,67 @@ class EasyChessGui:
                     def game_review_fail() -> None:
                         playsound.playsound(sound="sounds//error-when-entering-the-game-menu-132111.mp3", block=False)
                         print(f"FAIL:: Target Eval ({goal_eval}) - Your Eval ({new_eval})")
+                        # Let's try to find a refutation to understand properly why it's not a good move
+                        if original_next_position is not None:
+                            if original_next_position.move == window_read_result:
+                                return None
+                        # If it was the actual next move, we'll find the refutation later!
+                        self.play_move(move=window_read_result)
+                        self.review_attempt = 0
+
                     def game_review_success() -> None:
                         playsound.playsound(sound="sounds//success-1-6297.mp3", block=False)
                         print(f"SUCCESS:: Target Eval ({goal_eval}) - Your Eval ({new_eval})")
-                        self.play_move(move=original_next_position.move)
+                        if self.game_node.is_mainline():
+                            # Proceed to the next actual position from the game
+                            self.play_move(move=original_next_position.move)
+                            self.review_attempt = 0
+                        else:
+                            # Ok, we have found the "refutation" for the current board state which we got ourselves into by making a bad move
+                            # Now we go back up a step, hopefully until we get back to the actual mainline of the game!
+                            self.game_node = self.game_node.parent
+                            self.review_attempt = 999
 
                     current_eval: float = self.combined_evaluation(depth=23, nodes=5000)
                     new_eval: float = self.combined_evaluation(depth=23, nodes=5000, board=this_attempt_next_position)
-                    original_game_eval: float = self.combined_evaluation(depth=23, nodes=5000, board=original_next_position.board())
 
-                    # Want to move at least 5% towards the best move to consider myself 'improving' (otherwise 'success' can mean going from 99.9% loss to 99.8% when there's a way out)
-                    if self.turn == chess.WHITE:
-                        # At least 10% improvement on last try if not the best move
-                        goal_eval = original_game_eval
-                        # At most 5% evaluation loss against best move
-                        goal_eval = max(goal_eval, current_eval - 0.04)
-                        if (new_eval >= goal_eval):
-                            game_review_success()
+                    if original_next_position is not None:
+                        # There is a next move in the game already (either a mainline move or an already explored sub-variation)
+                        original_game_eval: float = self.combined_evaluation(depth=23, nodes=5000, board=original_next_position.board())
+
+                        # Want to move at least 5% towards the best move to consider myself 'improving' (otherwise 'success' can mean going from 99.9% loss to 99.8% when there's a way out)
+                        if self.turn == chess.WHITE:
+                            # At least 10% improvement on last try if not the best move
+                            goal_eval = original_game_eval
+                            # At most 5% evaluation loss against best move
+                            goal_eval = max(goal_eval, current_eval - 0.015)
+                            if (new_eval >= goal_eval):
+                                game_review_success()
+                            else:
+                                game_review_fail()
                         else:
-                            game_review_fail()
+                            goal_eval = original_game_eval
+                            goal_eval = min(goal_eval, current_eval + 0.015)
+                            if (new_eval <= goal_eval):
+                                game_review_success()
+                            else:
+                                game_review_fail()
                     else:
-                        goal_eval = original_game_eval
-                        goal_eval = min(goal_eval, current_eval + 0.04)
-                        if (new_eval <= goal_eval):
-                            game_review_success()
+                        # There is not a next move already (either the game is over or we are going down a new sub-variation)
+                        # Want to move at least 5% towards the best move to consider myself 'improving' (otherwise 'success' can mean going from 99.9% loss to 99.8% when there's a way out)
+                        if self.turn == chess.WHITE:
+                            # At least 10% improvement on last try if not the best move
+                            goal_eval = current_eval - 0.01
+                            if (new_eval >= goal_eval):
+                                game_review_success()
+                            else:
+                                game_review_fail()
                         else:
-                            game_review_fail()
+                            goal_eval = current_eval + 0.01
+                            if (new_eval <= goal_eval):
+                                game_review_success()
+                            else:
+                                game_review_fail()
                 else:
                     self.play_move(move=window_read_result)
                 continue
