@@ -472,7 +472,7 @@ class EasyChessGui:
     def popup_display_table(self, popup_title: str, data: pd.DataFrame) -> None:
         """Display a table of data in a pop up window"""
 
-        popup_layout = [[sg.Table(values=data.values.tolist(), headings=data.columns.tolist(), def_col_width=15, auto_size_columns=False)],
+        popup_layout = [[sg.Table(values=data.values.tolist(), headings=data.columns.tolist(), def_col_width=10, auto_size_columns=False)],
                                [sg.Ok()]]
 
         popup_window = sg.Window(title=popup_title,
