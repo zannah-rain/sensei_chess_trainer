@@ -89,7 +89,7 @@ menu_def_neutral = [
                     'Theme', GUI_THEME
                    ]
         ],
-        ["Data", ["Time Controls", "Games", "Stats", "Puzzles"]],
+        ["Data", ["Time Controls", "Games", "Prioritised Games", "Stats", "Puzzles"]],
         ["Lichess", ["Download all lichess .pgn's", "Download 1 lichess .pgn", "Download this positions lichess stats"]],
         ['&Time', ['User::tc_k', 'Engine::tc_k']],
         ['&Settings', ['Game::settings_game_k']],
@@ -157,6 +157,8 @@ class EasyChessGui:
         """"""
         self.puzzle_attempt = 0
         """Tracks attempts at the current puzzle, at the moment only the first attempt is recorded."""
+        self.review_attempt = 0
+        """Same again for game review moves"""
 
         # Default board color is brown
         self.sq_light_color = '#F0D9B5'
@@ -1121,10 +1123,31 @@ class EasyChessGui:
                 continue
 
             if button == "Games":
-                game_table = pd.DataFrame(data=self.database.con.execute("SELECT white, black, timestamp, link, result, time_control, variant, length, pgn, unique_positions, positions_reviewed, proportion_reviewed FROM game_stats").fetchall(),
-                                          columns=["white", "black", "timestamp", "link", "result", "time_control", "variant", "length", "pgn", "unique_positions", "positions_reviewed", "proportion_reviewed"]).sort_values(by="timestamp", ascending=False)
+                game_table = pd.DataFrame(data=self.database.con.execute("SELECT white, black, timestamp, link, result, time_control, variant, length, pgn, unique_positions, positions_reviewed, proportion_reviewed, avg_eval_loss, avg_times_practiced, min_times_practiced, avg_time_since_practice, training_priority FROM game_stats").fetchall(),
+                                          columns=["white", "black", "timestamp", "link", "result", "time_control", "variant", "length", "pgn", "unique_positions", "positions_reviewed", "proportion_reviewed", "avg_eval_loss", "avg_times_practiced", "min_times_practiced", "avg_time_since_practice", "priority"]).sort_values(by="timestamp", ascending=False)
+                game_table["avg_eval_loss"] = game_table["avg_eval_loss"].apply(lambda x: f"{x*100:.1f}%")
+                game_table["priority"] = game_table["priority"].apply(lambda x: f"{x:.2f}")
+                game_table["avg_times_practiced"] = game_table["avg_times_practiced"].apply(lambda x: f"{x:.2f}")
+                game_table["min_times_practiced"] = game_table["min_times_practiced"].apply(lambda x: f"{x:.0f}")
+                game_table["avg_time_since_practice"] = game_table["avg_time_since_practice"].apply(lambda x: f"{x:.1f}")
                 game_table["proportion_reviewed"] = game_table["proportion_reviewed"].apply(lambda x: f"{x*100:.1f}%")
                 popup_result = self.popup_display_table(popup_title="Games",
+                                                        data=game_table.drop(columns=["pgn"]))
+                if popup_result[1][0] is not None:
+                    self.game = chess.pgn.read_game(StringIO(game_table.iloc[popup_result[1][0][0], :]["pgn"]))
+                    self.game_review_mode = True
+                continue
+
+            if button == "Prioritised Games":
+                game_table = pd.DataFrame(data=self.database.con.execute("SELECT white, black, timestamp, link, result, time_control, variant, length, pgn, unique_positions, positions_reviewed, proportion_reviewed, avg_eval_loss, avg_times_practiced, min_times_practiced, avg_time_since_practice, training_priority FROM game_stats").fetchall(),
+                                          columns=["white", "black", "timestamp", "link", "result", "time_control", "variant", "length", "pgn", "unique_positions", "positions_reviewed", "proportion_reviewed", "avg_eval_loss", "avg_times_practiced", "min_times_practiced", "avg_time_since_practice", "priority"]).sort_values(by="priority", ascending=False)
+                game_table["avg_eval_loss"] = game_table["avg_eval_loss"].apply(lambda x: f"{x*100:.1f}%")
+                game_table["priority"] = game_table["priority"].apply(lambda x: f"{x:.2f}")
+                game_table["avg_times_practiced"] = game_table["avg_times_practiced"].apply(lambda x: f"{x:.2f}")
+                game_table["min_times_practiced"] = game_table["min_times_practiced"].apply(lambda x: f"{x:.0f}")
+                game_table["avg_time_since_practice"] = game_table["avg_time_since_practice"].apply(lambda x: f"{x:.1f}")
+                game_table["proportion_reviewed"] = game_table["proportion_reviewed"].apply(lambda x: f"{x*100:.1f}%")
+                popup_result = self.popup_display_table(popup_title="Prioritised Games",
                                                         data=game_table.drop(columns=["pgn"]))
                 if popup_result[1][0] is not None:
                     self.game = chess.pgn.read_game(StringIO(game_table.iloc[popup_result[1][0][0], :]["pgn"]))
