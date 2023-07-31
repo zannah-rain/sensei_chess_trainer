@@ -1021,17 +1021,16 @@ class EasyChessGui:
                     # - On success, the board will progress to the next board state from that game, not necessarily from the move we just played
                     # - There are unlimited attempts to solve
                     # Log the first attempt in the database
-                    self.database.log_human_move(board=self.board, 
-                                                 timestamp=datetime.datetime.now(), 
-                                                 player=username, 
-                                                 move=window_read_result, 
-                                                 is_real=False,
-                                                 time_taken_seconds=(datetime.datetime.now() - self._current_game_review_position_start_time).total_seconds())
+                    if self.review_attempt == 0:
+                        self.database.log_human_move(board=self.board, 
+                                                     timestamp=datetime.datetime.now(), 
+                                                     player=username, 
+                                                     move=window_read_result, 
+                                                     is_real=False,
+                                                     time_taken_seconds=(datetime.datetime.now() - self._current_game_review_position_start_time).total_seconds())
+                    self.review_attempt += 1
                     
                     original_next_position = self.game_node.next()
-                    if original_next_position is None:
-                        self.play_move(move=window_read_result)
-                        continue
                     this_attempt_next_position = self.game_node.board().copy()
                     this_attempt_next_position.push(window_read_result)
                     
