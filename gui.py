@@ -249,6 +249,35 @@ class EasyChessGui:
         self.leela_evaluation(nodes, board=board)
         return self.database.read_combined_engine_evaluation(board=board)
     
+    def stable_evaluation(self, min_depth, min_nodes, max_depth, max_instability: float, board=None) -> float:
+        """
+        To help in situations where evaluation is very unstable (and can move a lot from one ply to the next).
+        Keeps increasing depth until the difference in evaluation from one step to another is less than max_instability.
+        """
+        if board is None:
+            board = self.board
+
+        current_depth = min_depth
+        current_nodes = min_nodes
+
+        while current_depth < max_depth:
+            current_eval = self.combined_evaluation(depth=current_depth, nodes=current_nodes, board=board)
+
+            engine_move = self.database.engine_move(board=board, engine=self.stockfish(), depth_value=current_depth, multipv=1)
+            engine_next_position = board.copy()
+            engine_next_position.push(engine_move)
+            next_eval = self.combined_evaluation(depth=current_depth, nodes=current_nodes, board=engine_next_position)
+
+            if abs(next_eval - current_eval) > max_instability:
+                current_depth += 4
+                current_nodes += 5000
+                print(f"Unstable engine evaluation, increasing depth to {current_depth}")
+                continue
+
+            return next_eval
+        
+        return next_eval
+    
     @property
     def turn(self) -> bool:
         if self.game_node is None:
