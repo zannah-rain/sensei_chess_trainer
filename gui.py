@@ -168,6 +168,14 @@ class EasyChessGui:
         self.move_sq_light_color = '#E8E18E'
         self.move_sq_dark_color = '#B8AF4E'
 
+        # Move highlight for errors
+        self.error_sq_dark_color = '#882222'
+        self.error_sq_light_color = '#FF4444'
+
+        # Move highlight for successes
+        self.success_sq_dark_color = '#228822'
+        self.success_sq_light_color = '#44FF44'
+
         self.window = None
         self._game_node = None
         self.create_new_window()
@@ -609,6 +617,26 @@ class EasyChessGui:
             old_r = r
 
         return psgboard
+    
+    def highlight_error_square(self, window: sg.Window, row, col) -> None:
+        """ 
+        Change the color of a square based on square row and col.
+        """
+        btn_sq = window.find_element(key=(row, col))
+        is_dark_square = True if (row + col + self.mirrored) % 2 else False
+        bd_sq_color = self.error_sq_dark_color if is_dark_square else \
+                      self.error_sq_light_color
+        btn_sq.Update(button_color=('white', bd_sq_color))
+
+    def highlight_success_square(self, window: sg.Window, row, col) -> None:
+        """ 
+        Change the color of a square based on square row and col.
+        """
+        btn_sq = window.find_element(key=(row, col))
+        is_dark_square = True if (row + col + self.mirrored) % 2 else False
+        bd_sq_color = self.success_sq_dark_color if is_dark_square else \
+                      self.success_sq_light_color
+        btn_sq.Update(button_color=('white', bd_sq_color))
 
     def change_square_color(self, window: sg.Window, row, col):
         """ 
