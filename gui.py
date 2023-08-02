@@ -1047,7 +1047,12 @@ class EasyChessGui:
 
                             self.play_move(move=window_read_result)
 
-                            new_eval: float = self.combined_evaluation(depth=10, nodes=100)
+                            engine_move: chess.Move = self.database.engine_move(board=self.board, engine=self.stockfish(), depth_value=23, multipv=1)
+                            if engine_move == window_read_result:
+                                puzzle_success()
+                                continue
+
+                            new_eval: float = self.stable_evaluation(min_depth=10, min_nodes=100, max_depth=35, max_instability=0.005)
 
                             # Want to move at least 5% towards the best move to consider myself 'improving' (otherwise 'success' can mean going from 99.9% loss to 99.8% when there's a way out)
                             if self.current_puzzle.whose_turn == chess.WHITE:
