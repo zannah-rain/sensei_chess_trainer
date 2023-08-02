@@ -508,7 +508,7 @@ class Database:
                 MIN(times_practiced) AS min_times_practiced,
                 SUM(CAST(MIN(times_practiced, 10) AS FLOAT)) / COUNT(psig.position) AS avg_times_practiced,
                 AVG(days_since_last_practiced) AS avg_time_since_practice,
-                SUM(ma.priority) AS training_priority
+                AVG(ma.priority) AS training_priority
             FROM games g
             INNER JOIN positions_seen_in_games psig ON g.white=psig.white AND g.black=psig.black AND g.timestamp=psig.timestamp
             LEFT JOIN positions p ON psig.position = p.position
