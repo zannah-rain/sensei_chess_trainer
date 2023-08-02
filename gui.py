@@ -1104,6 +1104,8 @@ class EasyChessGui:
                         # Let's try to find a refutation to understand properly why it's not a good move
                         if original_next_position is not None:
                             if original_next_position.move == window_read_result:
+                                self.highlight_error_square(window=self.window, row=7-chess.square_rank(window_read_result.from_square), col=chess.square_file(window_read_result.from_square))
+                                self.highlight_error_square(window=self.window, row=7-chess.square_rank(window_read_result.to_square), col=chess.square_file(window_read_result.to_square))
                                 return None
                         # If it was the actual next move, we'll find the refutation later!
                         self.play_move(move=window_read_result)
@@ -1112,36 +1114,64 @@ class EasyChessGui:
                     def game_review_success() -> None:
                         playsound.playsound(sound="sounds//success-1-6297.mp3", block=False)
                         print(f"SUCCESS:: Target Eval ({goal_eval}) - Your Eval ({new_eval})")
+
                         if self.game_node.is_mainline():
                             # Proceed to the next actual position from the game
                             self.play_move(move=original_next_position.move)
                             self.review_attempt = 0
+                            original_move = original_next_position.move
+                            original_game_eval: float = self.stable_evaluation(min_depth=23, min_nodes=5000, max_depth=35, max_instability=0.005, board=original_next_position.board())
+                            if self.turn != chess.WHITE:
+                                if new_eval > original_game_eval:
+                                    self.highlight_error_square(window=self.window, row=7-chess.square_rank(original_move.from_square), col=chess.square_file(original_move.from_square))
+                                    self.highlight_error_square(window=self.window, row=7-chess.square_rank(original_move.to_square), col=chess.square_file(original_move.to_square))
+                                    self.highlight_success_square(window=self.window, row=7-chess.square_rank(window_read_result.to_square), col=chess.square_file(window_read_result.to_square))
+                                    self.highlight_success_square(window=self.window, row=7-chess.square_rank(window_read_result.from_square), col=chess.square_file(window_read_result.from_square))
+                            else:
+                                if new_eval < original_game_eval:
+                                    self.highlight_error_square(window=self.window, row=7-chess.square_rank(original_move.from_square), col=chess.square_file(original_move.from_square))
+                                    self.highlight_error_square(window=self.window, row=7-chess.square_rank(original_move.to_square), col=chess.square_file(original_move.to_square))
+                                    self.highlight_success_square(window=self.window, row=7-chess.square_rank(window_read_result.to_square), col=chess.square_file(window_read_result.to_square))
+                                    self.highlight_success_square(window=self.window, row=7-chess.square_rank(window_read_result.from_square), col=chess.square_file(window_read_result.from_square))
                         else:
                             # Ok, we have found the "refutation" for the current board state which we got ourselves into by making a bad move
                             # Now we go back up a step, hopefully until we get back to the actual mainline of the game!
                             self.game_node = self.game_node.parent
                             self.review_attempt = 999
 
-                    current_eval: float = self.combined_evaluation(depth=23, nodes=5000)
-                    new_eval: float = self.combined_evaluation(depth=23, nodes=5000, board=this_attempt_next_position)
+                    engine_move: chess.Move = self.database.engine_move(board=self.board, engine=self.stockfish(), depth_value=23, multipv=1)
+                    engine_move_position = self.game_node.board().copy()
+                    engine_move_position.push(engine_move)
+
+                    current_eval: float = self.stable_evaluation(min_depth=23, min_nodes=5000, max_depth=35, max_instability=0.005)
+                    current_eval_2: float = self.stable_evaluation(min_depth=23, min_nodes=5000, max_depth=35, max_instability=0.005, board=engine_move_position)
+                    new_eval: float = self.stable_evaluation(min_depth=23, min_nodes=5000, max_depth=35, max_instability=0.005, board=this_attempt_next_position)
+
+                    if engine_move == window_read_result:
+                        goal_eval = current_eval
+                        game_review_success()
+                        continue
 
                     if original_next_position is not None:
                         # There is a next move in the game already (either a mainline move or an already explored sub-variation)
-                        original_game_eval: float = self.combined_evaluation(depth=23, nodes=5000, board=original_next_position.board())
+                        original_move = original_next_position.move
+                        original_game_eval: float = self.stable_evaluation(min_depth=23, min_nodes=5000, max_depth=35, max_instability=0.005, board=original_next_position.board())
 
                         # Want to move at least 5% towards the best move to consider myself 'improving' (otherwise 'success' can mean going from 99.9% loss to 99.8% when there's a way out)
                         if self.turn == chess.WHITE:
+                            current_eval = min(current_eval, current_eval_2)  # Engine evaluations get unstable in sharp positions, this helps
                             # At least 10% improvement on last try if not the best move
-                            goal_eval = original_game_eval
                             # At most 5% evaluation loss against best move
-                            goal_eval = max(goal_eval, current_eval - 0.015)
+                            goal_eval = max(original_game_eval, current_eval - 0.02)  # If the move played in the game was worse than ~20cp loss, we want to find an even better one!
+                            goal_eval = min(goal_eval, current_eval - 0.01)  # If we play a move as good as carlsen manages on average, it should still count as a success even if the move in the original game is better!
                             if (new_eval >= goal_eval):
                                 game_review_success()
                             else:
                                 game_review_fail()
                         else:
-                            goal_eval = original_game_eval
-                            goal_eval = min(goal_eval, current_eval + 0.015)
+                            current_eval = max(current_eval, current_eval_2)  # Engine evaluations get unstable in sharp positions, this helps
+                            goal_eval = min(original_game_eval, current_eval + 0.02)
+                            goal_eval = max(goal_eval, current_eval + 0.01)
                             if (new_eval <= goal_eval):
                                 game_review_success()
                             else:
@@ -1151,13 +1181,15 @@ class EasyChessGui:
                         # Want to move at least 5% towards the best move to consider myself 'improving' (otherwise 'success' can mean going from 99.9% loss to 99.8% when there's a way out)
                         if self.turn == chess.WHITE:
                             # At least 10% improvement on last try if not the best move
-                            goal_eval = current_eval - 0.01
+                            current_eval = min(current_eval, current_eval_2)  # Engine evaluations get unstable in sharp positions, this helps
+                            goal_eval = current_eval - 0.02
                             if (new_eval >= goal_eval):
                                 game_review_success()
                             else:
                                 game_review_fail()
                         else:
-                            goal_eval = current_eval + 0.01
+                            current_eval = max(current_eval, current_eval_2)  # Engine evaluations get unstable in sharp positions, this helps
+                            goal_eval = current_eval + 0.02
                             if (new_eval <= goal_eval):
                                 game_review_success()
                             else:
