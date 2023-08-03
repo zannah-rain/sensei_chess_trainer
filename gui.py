@@ -1116,23 +1116,26 @@ class EasyChessGui:
                         print(f"SUCCESS:: Target Eval ({goal_eval}) - Your Eval ({new_eval})")
 
                         if self.game_node.is_mainline():
-                            # Proceed to the next actual position from the game
-                            self.play_move(move=original_next_position.move)
                             self.review_attempt = 0
-                            original_move = original_next_position.move
-                            original_game_eval: float = self.stable_evaluation(min_depth=23, min_nodes=5000, max_depth=35, max_instability=0.005, board=original_next_position.board())
-                            if self.turn != chess.WHITE:
-                                if new_eval > original_game_eval:
-                                    self.highlight_error_square(window=self.window, row=7-chess.square_rank(original_move.from_square), col=chess.square_file(original_move.from_square))
-                                    self.highlight_error_square(window=self.window, row=7-chess.square_rank(original_move.to_square), col=chess.square_file(original_move.to_square))
-                                    self.highlight_success_square(window=self.window, row=7-chess.square_rank(window_read_result.to_square), col=chess.square_file(window_read_result.to_square))
-                                    self.highlight_success_square(window=self.window, row=7-chess.square_rank(window_read_result.from_square), col=chess.square_file(window_read_result.from_square))
+                            if original_next_position is not None:
+                                # Proceed to the next actual position from the game
+                                self.play_move(move=original_next_position.move)
+                                original_move = original_next_position.move
+                                original_game_eval: float = self.stable_evaluation(min_depth=23, min_nodes=5000, max_depth=35, max_instability=0.005, board=original_next_position.board())
+                                if self.turn != chess.WHITE:
+                                    if new_eval > original_game_eval:
+                                        self.highlight_error_square(window=self.window, row=7-chess.square_rank(original_move.from_square), col=chess.square_file(original_move.from_square))
+                                        self.highlight_error_square(window=self.window, row=7-chess.square_rank(original_move.to_square), col=chess.square_file(original_move.to_square))
+                                        self.highlight_success_square(window=self.window, row=7-chess.square_rank(window_read_result.to_square), col=chess.square_file(window_read_result.to_square))
+                                        self.highlight_success_square(window=self.window, row=7-chess.square_rank(window_read_result.from_square), col=chess.square_file(window_read_result.from_square))
+                                else:
+                                    if new_eval < original_game_eval:
+                                        self.highlight_error_square(window=self.window, row=7-chess.square_rank(original_move.from_square), col=chess.square_file(original_move.from_square))
+                                        self.highlight_error_square(window=self.window, row=7-chess.square_rank(original_move.to_square), col=chess.square_file(original_move.to_square))
+                                        self.highlight_success_square(window=self.window, row=7-chess.square_rank(window_read_result.to_square), col=chess.square_file(window_read_result.to_square))
+                                        self.highlight_success_square(window=self.window, row=7-chess.square_rank(window_read_result.from_square), col=chess.square_file(window_read_result.from_square))
                             else:
-                                if new_eval < original_game_eval:
-                                    self.highlight_error_square(window=self.window, row=7-chess.square_rank(original_move.from_square), col=chess.square_file(original_move.from_square))
-                                    self.highlight_error_square(window=self.window, row=7-chess.square_rank(original_move.to_square), col=chess.square_file(original_move.to_square))
-                                    self.highlight_success_square(window=self.window, row=7-chess.square_rank(window_read_result.to_square), col=chess.square_file(window_read_result.to_square))
-                                    self.highlight_success_square(window=self.window, row=7-chess.square_rank(window_read_result.from_square), col=chess.square_file(window_read_result.from_square))
+                                self.play_move(move=window_read_result)
                         else:
                             # Ok, we have found the "refutation" for the current board state which we got ourselves into by making a bad move
                             # Now we go back up a step, hopefully until we get back to the actual mainline of the game!
