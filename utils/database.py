@@ -506,7 +506,7 @@ class Database:
                 CAST(COUNT(p.comment) AS FLOAT) / COUNT(psig.position) AS proportion_reviewed,
                 AVG(latest_real_eval_loss) AS avg_eval_loss,
                 MIN(times_practiced) AS min_times_practiced,
-                SUM(CAST(MIN(times_practiced, 10) AS FLOAT)) / COUNT(psig.position) AS avg_times_practiced,
+                SUM(CAST(MIN(times_practiced, 5) AS FLOAT)) / COUNT(psig.position) AS avg_times_practiced,
                 AVG(days_since_last_practiced) AS avg_time_since_practice,
                 AVG(ma.priority) AS training_priority
             FROM games g
