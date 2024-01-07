@@ -518,6 +518,16 @@ class EasyChessGui:
                                  layout=popup_layout).read(close=True)
         
         return popup_window
+    
+    def popup_display_text(self, popup_title: str, text: str) -> None:
+
+        popup_layout = [[sg.Multiline(default_text=text)],
+                        [sg.Ok()]]
+
+        popup_window = sg.Window(title=popup_title,
+                                 layout=popup_layout).read(close=True)
+        
+        return popup_window
 
     def create_new_window(self) -> sg.Window:
         """ Close the window param just before turning the new window """
@@ -922,6 +932,15 @@ class EasyChessGui:
         self.text_io_review_evaluation = sg.Input(default_text=self.review_evaluation, key="review_manual_evaluation_key")
         self.text_io_review_name = sg.Input(default_text=self.position_name, key="position_name_key")
 
+        # Settings tab
+        self.radio_after_success_next_game_position = sg.Radio("Next position from game", group_id="ON_SUCCESS")
+        self.radio_after_success_played_move = sg.Radio("Played move", group_id="ON_SUCCESS")
+        self.radio_after_success_played_stockfish = sg.Radio("Stockfish response", group_id="ON_SUCCESS")
+        self.radio_after_success_played_next_puzzle = sg.Radio("Next Puzzle", group_id="ON_SUCCESS")
+
+        self.radio_after_fail_no_change = sg.Radio("Keep current position", group_id="ON_FAIL")
+        self.radio_after_fail_find_refutation = sg.Radio("Find refutation", group_id="ON_FAIL")
+
         moves_table = self.moves_table
         self.table_output_moves = sg.Table(values=moves_table.values.tolist(), headings=moves_table.columns.tolist())
 
@@ -953,6 +972,7 @@ class EasyChessGui:
         review_layout = [[sg.Text("Manual Evaluation:"), self.text_io_review_evaluation],
                          [sg.Frame(title="Comment", layout=[[self.text_io_review_comment]])]]
         moves_layout = [[sg.Frame(title="Moves", layout=[[self.table_output_moves]])]]
+        settings_layout = [[sg.Frame(title="Interaction", layout=[[]])]]
         console_layout = [[self.console_output]]
 
         # l1 is the layout for tab1
@@ -1040,6 +1060,12 @@ class EasyChessGui:
                             
                             def puzzle_fail() -> None:
                                 playsound.playsound(sound="sounds//error-when-entering-the-game-menu-132111.mp3", block=False)
+                                self.popup_display_text(popup_title="Puzzle Result", text=f"""Not Quite!\n"""
+                                                                                          f"""Best Move Eval: {self.current_puzzle.evaluation}\n"""
+                                                                                          f"""Goal Eval: {goal_eval}\n"""
+                                                                                          f"""Your Original Eval: {self.current_puzzle.latest_real_eval}\n"""
+                                                                                          f"""Your Last Try: {self.current_puzzle.latest_practice_eval}\n"""
+                                                                                          f"""This Try: {new_eval}""")
                                 print(f"FAIL:: Target Eval ({goal_eval}) - Your Eval ({new_eval})")
                             def puzzle_success() -> None:
                                 playsound.playsound(sound="sounds//success-1-6297.mp3", block=False)
@@ -1052,7 +1078,7 @@ class EasyChessGui:
                                 puzzle_success()
                                 continue
 
-                            new_eval: float = self.stable_evaluation(min_depth=10, min_nodes=100, max_depth=35, max_instability=0.005)
+                            new_eval: float = self.stable_evaluation(min_depth=10, min_nodes=1000, max_depth=30, max_instability=0.009)
 
                             # Want to move at least 5% towards the best move to consider myself 'improving' (otherwise 'success' can mean going from 99.9% loss to 99.8% when there's a way out)
                             if self.current_puzzle.whose_turn == chess.WHITE:
@@ -1121,7 +1147,7 @@ class EasyChessGui:
                                 # Proceed to the next actual position from the game
                                 self.play_move(move=original_next_position.move)
                                 original_move = original_next_position.move
-                                original_game_eval: float = self.stable_evaluation(min_depth=23, min_nodes=5000, max_depth=35, max_instability=0.005, board=original_next_position.board())
+                                original_game_eval: float = self.stable_evaluation(min_depth=23, min_nodes=5000, max_depth=30, max_instability=0.009, board=original_next_position.board())
                                 if self.turn != chess.WHITE:
                                     if new_eval > original_game_eval:
                                         self.highlight_error_square(window=self.window, row=7-chess.square_rank(original_move.from_square), col=chess.square_file(original_move.from_square))
@@ -1146,9 +1172,9 @@ class EasyChessGui:
                     engine_move_position = self.game_node.board().copy()
                     engine_move_position.push(engine_move)
 
-                    current_eval: float = self.stable_evaluation(min_depth=23, min_nodes=5000, max_depth=35, max_instability=0.005)
-                    current_eval_2: float = self.stable_evaluation(min_depth=23, min_nodes=5000, max_depth=35, max_instability=0.005, board=engine_move_position)
-                    new_eval: float = self.stable_evaluation(min_depth=23, min_nodes=5000, max_depth=35, max_instability=0.005, board=this_attempt_next_position)
+                    current_eval: float = self.stable_evaluation(min_depth=23, min_nodes=5000, max_depth=30, max_instability=0.009)
+                    current_eval_2: float = self.stable_evaluation(min_depth=23, min_nodes=5000, max_depth=30, max_instability=0.009, board=engine_move_position)
+                    new_eval: float = self.stable_evaluation(min_depth=23, min_nodes=5000, max_depth=30, max_instability=0.009, board=this_attempt_next_position)
 
                     if engine_move == window_read_result:
                         goal_eval = current_eval
@@ -1158,14 +1184,14 @@ class EasyChessGui:
                     if original_next_position is not None:
                         # There is a next move in the game already (either a mainline move or an already explored sub-variation)
                         original_move = original_next_position.move
-                        original_game_eval: float = self.stable_evaluation(min_depth=23, min_nodes=5000, max_depth=35, max_instability=0.005, board=original_next_position.board())
+                        original_game_eval: float = self.stable_evaluation(min_depth=23, min_nodes=5000, max_depth=30, max_instability=0.009, board=original_next_position.board())
 
                         # Want to move at least 5% towards the best move to consider myself 'improving' (otherwise 'success' can mean going from 99.9% loss to 99.8% when there's a way out)
                         if self.turn == chess.WHITE:
                             current_eval = min(current_eval, current_eval_2)  # Engine evaluations get unstable in sharp positions, this helps
                             # At least 10% improvement on last try if not the best move
                             # At most 5% evaluation loss against best move
-                            goal_eval = max(original_game_eval, current_eval - 0.02)  # If the move played in the game was worse than ~20cp loss, we want to find an even better one!
+                            goal_eval = max(original_game_eval, current_eval - 0.03)  # If the move played in the game was worse than ~20cp loss, we want to find an even better one!
                             goal_eval = min(goal_eval, current_eval - 0.01)  # If we play a move as good as carlsen manages on average, it should still count as a success even if the move in the original game is better!
                             if (new_eval >= goal_eval):
                                 game_review_success()
@@ -1173,7 +1199,7 @@ class EasyChessGui:
                                 game_review_fail()
                         else:
                             current_eval = max(current_eval, current_eval_2)  # Engine evaluations get unstable in sharp positions, this helps
-                            goal_eval = min(original_game_eval, current_eval + 0.02)
+                            goal_eval = min(original_game_eval, current_eval + 0.03)
                             goal_eval = max(goal_eval, current_eval + 0.01)
                             if (new_eval <= goal_eval):
                                 game_review_success()
@@ -1185,14 +1211,14 @@ class EasyChessGui:
                         if self.turn == chess.WHITE:
                             # At least 10% improvement on last try if not the best move
                             current_eval = min(current_eval, current_eval_2)  # Engine evaluations get unstable in sharp positions, this helps
-                            goal_eval = current_eval - 0.02
+                            goal_eval = current_eval - 0.04
                             if (new_eval >= goal_eval):
                                 game_review_success()
                             else:
                                 game_review_fail()
                         else:
                             current_eval = max(current_eval, current_eval_2)  # Engine evaluations get unstable in sharp positions, this helps
-                            goal_eval = current_eval + 0.02
+                            goal_eval = current_eval + 0.04
                             if (new_eval <= goal_eval):
                                 game_review_success()
                             else:
@@ -1275,6 +1301,7 @@ class EasyChessGui:
                                           columns=["white", "black", "timestamp", "link", "result", "time_control", "variant", "length", "pgn", "unique_positions", "positions_reviewed", "proportion_reviewed", "avg_eval_loss", "avg_times_practiced", "min_times_practiced", "avg_time_since_practice", "priority"])
                 game_table["due"] = (game_table["avg_time_since_practice"] > (game_table["min_times_practiced"] ** 2)).astype(int) * 2
                 game_table.loc[game_table["min_times_practiced"] == 0, "due"] = 1
+                game_table.loc[(game_table["min_times_practiced"] == 0) & (game_table["white"] != username) & (game_table["black"] != username), "due"] = 2
                 game_table["priority"] = game_table["priority"] * game_table["avg_times_practiced"] / game_table["avg_time_since_practice"]
                 game_table = game_table.sort_values(by=["due", "priority"], ascending=[False, False])
                 game_table["avg_eval_loss"] = game_table["avg_eval_loss"].apply(lambda x: f"{x*100:.1f}%")
