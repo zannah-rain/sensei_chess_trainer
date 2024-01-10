@@ -337,8 +337,8 @@ class EasyChessGui:
         else:
             self.text_output_board_date_seen.update(f"Position not seen in a real game")
 
-        stockfish_eval = self.stockfish_evaluation(depth=10)
-        leela_eval = self.leela_evaluation(nodes=100)
+        stockfish_eval = self.stockfish_evaluation(depth=25)
+        leela_eval = self.leela_evaluation(nodes=100_000)
         if self.mirrored:
             stockfish_eval = 1 - stockfish_eval
             leela_eval = 1 - leela_eval
@@ -849,7 +849,10 @@ class EasyChessGui:
                 
     def play_move(self, move: chess.Move):
         """Update the current board state with the given move, highlighting what's changed."""
-        playsound.playsound("sounds\move-self.mp3", block=False)
+        try:
+            playsound.playsound("sounds\\move-self.mp3", block=False)
+        except playsound.PlaysoundException as e:
+            self.console_output.print(e.args)
         if move in self.moves.keys():
             self.game_node = self.moves[move]
             return None
@@ -1067,9 +1070,18 @@ class EasyChessGui:
                                                                                           f"""Your Last Try: {self.current_puzzle.latest_practice_eval}\n"""
                                                                                           f"""This Try: {new_eval}""")
                                 print(f"FAIL:: Target Eval ({goal_eval}) - Your Eval ({new_eval})")
+                                self.highlight_error_square(window=self.window, row=7-chess.square_rank(window_read_result.from_square), col=chess.square_file(window_read_result.from_square))
+                                self.highlight_error_square(window=self.window, row=7-chess.square_rank(window_read_result.to_square), col=chess.square_file(window_read_result.to_square))
                             def puzzle_success() -> None:
-                                playsound.playsound(sound="sounds//success-1-6297.mp3", block=False)
+                                try:
+                                    playsound.playsound(sound="sounds//success-1-6297.mp3", block=False)
+                                except playsound.PlaysoundException as e:
+                                    self.console_output.print(e.args)
                                 print(f"SUCCESS:: Target Eval ({goal_eval}) - Your Eval ({new_eval})")
+                                self.highlight_error_square(window=self.window, row=7-chess.square_rank(self.current_puzzle.latest_attempt_move_object.from_square), col=chess.square_file(self.current_puzzle.latest_attempt_move_object.from_square))
+                                self.highlight_error_square(window=self.window, row=7-chess.square_rank(self.current_puzzle.latest_attempt_move_object.to_square), col=chess.square_file(self.current_puzzle.latest_attempt_move_object.to_square))
+                                self.highlight_success_square(window=self.window, row=7-chess.square_rank(window_read_result.to_square), col=chess.square_file(window_read_result.to_square))
+                                self.highlight_success_square(window=self.window, row=7-chess.square_rank(window_read_result.from_square), col=chess.square_file(window_read_result.from_square))
 
                             self.play_move(move=window_read_result)
 
@@ -1263,8 +1275,8 @@ class EasyChessGui:
                 continue
 
             if button == "Build puzzles":
-                self.database.full_engine_evaluation(engine=self.stockfish(), depth_value=10)
-                self.database.full_engine_evaluation(engine=self.leela(), depth_value=500)
+                self.database.full_engine_evaluation(engine=self.stockfish(), depth_value=20)
+                self.database.full_engine_evaluation(engine=self.leela(), depth_value=10_000)
                 continue
 
             if button == "Time Controls":
