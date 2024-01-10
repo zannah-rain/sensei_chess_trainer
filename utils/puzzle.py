@@ -1,3 +1,4 @@
+import chess
 
 
 class Puzzle:
@@ -42,4 +43,14 @@ class Puzzle:
         """When the position has last been practiced (or played in a real game)."""
         self.latest_practice_time_taken_seconds = x["latest_practice_time_taken_seconds"]
         """How many seconds the last practice attempt took (Or an extrapolated value from the original time control)"""
+
+    @property
+    def starting_board(self) -> chess.Board:
+        """Returns the starting board position."""
+        return chess.Board(fen=self.position)
+    
+    @property
+    def latest_attempt_move_object(self) -> chess.Move:
+        """Returns the latest attempt move as a chess.Move object."""
+        return self.starting_board.parse_san(self.latest_attempt_move)
         
