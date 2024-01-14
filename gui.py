@@ -393,8 +393,14 @@ class EasyChessGui:
     
     def refresh_stats_tab(self) -> None:
         stats = dict(self.database.con.execute("SELECT * FROM move_stats").fetchall()[0])
-        self.progress_output_today_study.update(stats["positions_practiced_today"] / (max(stats["total_half_moves_from_real_games_today"], 10) // 2))
-        self.progress_output_puzzles_study.update(stats["positions_practiced_today"] / (max(stats["total_half_moves_from_real_games_today"], 10) // 2))
+
+        total_eval_improvement_today = stats["sum_real_eval_loss_today"] - stats["sum_practice_eval_loss_today"]
+        average_eval_loss_per_day = stats["this_month_total_real_eval_loss"] / 30
+        daily_eval_improvement_target = average_eval_loss_per_day * 2
+
+        self.progress_output_today_study.update(total_eval_improvement_today / daily_eval_improvement_target)
+        self.progress_output_puzzles_study.update(total_eval_improvement_today / daily_eval_improvement_target)
+
         self.text_output_today_games.update(dedent(text=f"""\
             Games played: {stats["total_games_played_today"]}
             New puzzles: {stats["total_half_moves_from_real_games_today"] // 2}"""))
@@ -403,6 +409,7 @@ class EasyChessGui:
             Average original eval loss: {ifnone(stats["average_real_eval_loss_today"], 0):.3f}
             Average new eval loss: {ifnone(stats["average_practice_eval_loss_today"], 0):.3f}
             Improvement: {(1 - ifnone(stats["average_practice_eval_loss_today"], 0) / ifnone(stats["average_real_eval_loss_today"], 1)) * 100:.1f}%
+            Total Improvement vs Target: {total_eval_improvement_today:2f} vs {daily_eval_improvement_target:2f}
             """))
         self.text_output_alltime_games.update(dedent(f"""\
             Total games played: {stats["total_games_played"]}
@@ -1062,7 +1069,10 @@ class EasyChessGui:
                                                          time_taken_seconds=(datetime.datetime.now() - self.current_puzzle_start_time).total_seconds())
                             
                             def puzzle_fail() -> None:
-                                playsound.playsound(sound="sounds//error-when-entering-the-game-menu-132111.mp3", block=False)
+                                try:
+                                    playsound.playsound(sound="sounds//error-when-entering-the-game-menu-132111.mp3", block=False)
+                                except playsound.PlaysoundException as e:
+                                    self.console_output.print(e.args)
                                 self.popup_display_text(popup_title="Puzzle Result", text=f"""Not Quite!\n"""
                                                                                           f"""Best Move Eval: {self.current_puzzle.evaluation}\n"""
                                                                                           f"""Goal Eval: {goal_eval}\n"""
@@ -1090,7 +1100,7 @@ class EasyChessGui:
                                 puzzle_success()
                                 continue
 
-                            new_eval: float = self.stable_evaluation(min_depth=10, min_nodes=1000, max_depth=30, max_instability=0.009)
+                            new_eval: float = self.stable_evaluation(min_depth=20, min_nodes=10_000, max_depth=30, max_instability=0.009)
 
                             # Want to move at least 5% towards the best move to consider myself 'improving' (otherwise 'success' can mean going from 99.9% loss to 99.8% when there's a way out)
                             if self.current_puzzle.whose_turn == chess.WHITE:
