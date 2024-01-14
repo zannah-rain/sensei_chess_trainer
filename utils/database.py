@@ -205,6 +205,8 @@ class Database:
             length INTEGER NOT NULL,  -- halfmoves
             PRIMARY KEY (white, black, timestamp)
             )""")
+        self.con.execute("""CREATE INDEX IF NOT EXISTS igames_black on games(black)""")
+        self.con.execute("""CREATE INDEX IF NOT EXISTS igames_timestamp on games(timestamp)""")
         
     def initialise_lichess_stats_tables(self) -> None:
         # Enum table to help sorting
@@ -452,6 +454,7 @@ class Database:
             is_users_turn INTEGER GENERATED ALWAYS AS (player_turn == '{username}') STORED
         )""")
         self.con.execute("""CREATE INDEX IF NOT EXISTS ipositions_seen_position on positions_seen_in_games(position)""")
+        self.con.execute("""CREATE INDEX IF NOT EXISTS ipositions_seen_whiteblacktimestmp on positions_seen_in_games(white, black, timestamp)""")
 
         self.con.execute("""CREATE TABLE IF NOT EXISTS positions_metadata (
             position TEXT NOT NULL PRIMARY KEY,
@@ -641,6 +644,8 @@ class Database:
             time_taken_seconds REAL,
             PRIMARY KEY (position, timestamp, player, real_or_practice)
         )""")
+        self.con.execute("""CREATE INDEX IF NOT EXISTS imove_attempts_realorpractice on move_attempts(real_or_practice)""")
+        self.con.execute("""CREATE INDEX IF NOT EXISTS imove_attempts_positionplayerreal on move_attempts(position, player, real_or_practice)""")
 
         self.con.execute("""CREATE TEMP VIEW move_attempts_practice_summary AS
             SELECT 
@@ -851,7 +856,8 @@ class Database:
                 SELECT 
                     1 AS indxx,
                     COUNT(*) AS positions_played,
-                    AVG(latest_real_eval_loss) AS average_real_eval_loss
+                    AVG(latest_real_eval_loss) AS average_real_eval_loss,
+                    SUM(latest_real_eval_loss) AS total_real_eval_loss
                 FROM move_attempt_analysis
                 WHERE days_since_last_seen <= 30
             ),
@@ -928,7 +934,8 @@ class Database:
                 IFNULL(overall_game_stats.games_played, 0) AS total_games_played,
                 overall_game_stats.average_half_moves AS average_game_halfmoves_alltime,
                 IFNULL(this_month_performance_stats.positions_played, 0) AS this_month_positions_played,
-                this_month_performance_stats.average_real_eval_loss AS this_month_average_real_eval_loss
+                this_month_performance_stats.average_real_eval_loss AS this_month_average_real_eval_loss,
+                this_month_performance_stats.total_real_eval_loss AS this_month_total_real_eval_loss
             FROM 
                 todays_practice_stats
                 INNER JOIN todays_game_stats ON todays_practice_stats.indxx = todays_game_stats.indxx
