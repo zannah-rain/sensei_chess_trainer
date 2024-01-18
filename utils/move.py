@@ -3,7 +3,7 @@ from utils.square import Square
 from typing import List
 
 
-class TaggedMove:
+class Move:
     """
     A single object representing a specific move being made in a specific position.
     Basically an interface to python.chess that makes this sort of data easier to get, and easier to understand.
@@ -399,7 +399,7 @@ class TaggedMove:
         """The number of enemy kings which are also attacking the square we're moving from"""
         return len([1 for i in self._enemy_source_attackers if i.piece_type == chess.KING])
 
-    def __init__(self, board: chess.Board, move: chess.Move):
+    def __init__(self, move: chess.Move, board: chess.Board = None):
         """
         Gets a bunch of basically tag info that can be linked to a given move in a given position.
         For example: Does the move give a check? Is it en passant? Does it move onto a back rank?
@@ -409,7 +409,12 @@ class TaggedMove:
         """
 
         self.move = move
-        self.board = board.copy()
+
+        if board is not None:
+            self.board = board.copy()
+        else:
+            self.board = None
+
         self._resulting_board = None
         self._capture_square = None
         
