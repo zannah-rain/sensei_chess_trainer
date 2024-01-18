@@ -52,7 +52,7 @@ from utils.puzzle import Puzzle
 from utils.engine import Engine, EngineEvaluationResult
 from zPosition import zPosition
 from pathlib import Path
-from typing import Dict
+from typing import Dict, Tuple
 from utils.database import Database, position_to_fen
 import json
 from utils.settings import Settings
@@ -66,6 +66,9 @@ from utils.promotion_select_window import select_promotion_piece
 from textwrap import dedent
 from io import StringIO
 from utils.gui import RoundedButton
+import utils.colours
+from utils.square import Square
+from utils.move import Move
 
 logging.basicConfig(level=logging.INFO)
 
@@ -103,6 +106,17 @@ def ifnone(x, y):
     return x
 
 
+# Default board color is brown
+light_gray = (224, 224, 224)
+dark_gray = (158, 158, 158)
+red = (255, 0, 0)
+green = (0, 255, 0)
+blue = (0, 0, 255)
+purple = (160, 32, 255)
+yellow = (255, 224, 32)
+orange = (255, 128, 0)
+
+
 class EasyChessGui:
     queue = queue.Queue()
     
@@ -110,7 +124,7 @@ class EasyChessGui:
         # Initialise hidden stuff first as properties might depend on them existing
         self._stockfish = None
         self._leela = None
-        self._board_perspective = None
+        self._board_perspective = chess.WHITE
         self._mirrored = False
 
         self.database = Database()
@@ -160,22 +174,6 @@ class EasyChessGui:
         self.review_attempt = 0
         """Same again for game review moves"""
 
-        # Default board color is brown
-        self.sq_light_color = '#F0D9B5'
-        self.sq_dark_color = '#B58863'
-
-        # Move highlight, for brown board
-        self.move_sq_light_color = '#E8E18E'
-        self.move_sq_dark_color = '#B8AF4E'
-
-        # Move highlight for errors
-        self.error_sq_dark_color = '#882222'
-        self.error_sq_light_color = '#FF4444'
-
-        # Move highlight for successes
-        self.success_sq_dark_color = '#228822'
-        self.success_sq_light_color = '#44FF44'
-
         self.window = None
         self._game_node = None
         self.create_new_window()
@@ -188,6 +186,21 @@ class EasyChessGui:
         # Tracking any short term variables in between window reads
         self.move_state = 0
         self.move_from = None
+
+    @property
+    def move_from(self) -> Square:
+        return self._move_from
+    
+    @move_from.setter
+    def move_from(self, value: Square) -> None:
+        assert isinstance(value, Square) or value is None
+        self._move_from = value
+
+    def play_sound(self, sound_file: Path) -> None:
+        try:
+            playsound.playsound(sound=sound_file, block=False)
+        except playsound.PlaysoundException as e:
+            self.console_output.print(e.args)
 
     @property
     def current_puzzle(self) -> Puzzle:
@@ -309,8 +322,7 @@ class EasyChessGui:
             # Has a parent node and 'move' that we can highlight
             move = self._game_node.move
             if move is not None:
-                self.change_square_color(self.window, 7 - chess.square_rank(move.from_square), chess.square_file(move.from_square))
-                self.change_square_color(self.window, 7 - chess.square_rank(move.to_square), chess.square_file(move.to_square))
+                self.highlight_moves(((move, yellow),))
         
         # Update GUI
         if self.mirror_aware_turn == chess.WHITE:
@@ -633,39 +645,34 @@ class EasyChessGui:
 
             old_r = r
 
-        return psgboard
+        return list(reversed(psgboard))
     
-    def highlight_error_square(self, window: sg.Window, row, col) -> None:
-        """ 
-        Change the color of a square based on square row and col.
+    def _set_element_color_rgb(self, element, color: tuple):
+        """ Set element color based on rgb """
+        hex_color = utils.colours.rgb_to_hex(color)
+        element.Update(button_color=('white', hex_color))
+    
+    def highlight_squares(self, square_colour_tuple: Tuple[Tuple[Square, tuple]], highlight_strength: float = 0.5) -> None:
         """
-        btn_sq = window.find_element(key=(row, col))
-        is_dark_square = True if (row + col + self.mirrored) % 2 else False
-        bd_sq_color = self.error_sq_dark_color if is_dark_square else \
-                      self.error_sq_light_color
-        btn_sq.Update(button_color=('white', bd_sq_color))
-
-    def highlight_success_square(self, window: sg.Window, row, col) -> None:
-        """ 
-        Change the color of a square based on square row and col.
+        Change the color of a square based on row & col. Adds the given colour to the base colour of that square.
         """
-        btn_sq = window.find_element(key=(row, col))
-        is_dark_square = True if (row + col + self.mirrored) % 2 else False
-        bd_sq_color = self.success_sq_dark_color if is_dark_square else \
-                      self.success_sq_light_color
-        btn_sq.Update(button_color=('white', bd_sq_color))
+        for square, colour in square_colour_tuple:
+            if isinstance(square, int):
+                square = Square(square)
+            btn_sq = self.window.find_element(key=(square.rank_id, square.file_id))
+            is_dark_square = True if (square.rank_id + square.file_id + self.mirrored) % 2 else False
+            base_color = dark_gray if is_dark_square else light_gray
+            new_color = tuple(round(c1 * (1 - highlight_strength) + c2 * highlight_strength) for c1, c2 in zip(base_color, colour))
+            self._set_element_color_rgb(btn_sq, new_color)
 
-    def change_square_color(self, window: sg.Window, row, col):
-        """ 
-        Change the color of a square based on square row and col.
+    def highlight_moves(self, move_colour_tuple: tuple, highlight_strength: float = 0.5) -> None:
         """
-        btn_sq = window.find_element(key=(row, col))
-        is_dark_square = True if (row + col + self.mirrored) % 2 else False
-        bd_sq_color = self.move_sq_dark_color if is_dark_square else \
-                      self.move_sq_light_color
-        btn_sq.Update(button_color=('white', bd_sq_color))
+        Change the color of squares relevant to the given moves. Adds the given colour to the base colour of that square.
+        """
+        square_colour_tuple = tuple([(move.from_square, colour) for move, colour in move_colour_tuple]) + tuple([(move.to_square, colour) for move, colour in move_colour_tuple])
+        self.highlight_squares(square_colour_tuple=square_colour_tuple, highlight_strength=highlight_strength)
 
-    def relative_row(self, s, stm):
+    def relative_row(self, s: Square | chess.Square, stm):
         """
         The board can be viewed, as white at the bottom and black at the
         top. If stm is white the row 0 is at the bottom. If stm is black
@@ -674,24 +681,9 @@ class EasyChessGui:
         :param stm: side to move
         :return: relative row
         """
-        return 7 - self.get_row(s) if stm else self.get_row(s)
-
-    def get_row(self, s):
-        """
-        This row is based on PySimpleGUI square mapping that is 0 at the
-        top and 7 at the bottom.
-        In contrast Python-chess square mapping is 0 at the bottom and 7
-        at the top. chess.square_rank() is a method from Python-chess that
-        returns row given square s.
-
-        :param s: square
-        :return: row
-        """
-        return 7 - chess.square_rank(s)
-
-    def get_col(self, s):
-        """ Returns col given square s """
-        return chess.square_file(s)
+        if isinstance(s, Square):
+            s = s.id
+        return chess.square_rank(s) if stm else 7 - chess.square_rank(s)
 
     def redraw_board(self):
         """
@@ -702,19 +694,20 @@ class EasyChessGui:
         """
         for i in range(8):
             for j in range(8):
-                color = self.sq_dark_color if (i + j + self.mirrored) % 2 else \
-                        self.sq_light_color
+                color = dark_gray if (i + j + self.mirrored) % 2 else \
+                        light_gray
                 piece_image = images[self.psg_board[i][j]]
                 elem = self.window.find_element(key=(i, j))
-                elem.Update(button_color=('white', color),
-                            image_filename=piece_image, )
+                self._set_element_color_rgb(elem, color)
+                elem.Update(image_filename=piece_image)
 
     def render_square(self, image, key, location):
         """ Returns an RButton (Read Button) with image image """
         if (location[0] + location[1] + self.mirrored) % 2:
-            color = self.sq_dark_color  # Dark square
+            color = dark_gray  # Dark square
         else:
-            color = self.sq_light_color
+            color = light_gray
+        color = utils.colours.rgb_to_hex(color)
         return sg.RButton('', image_filename=image, size=(1, 1),
                           border_width=0, button_color=('white', color),
                           pad=(0, 0), key=key)
@@ -768,33 +761,27 @@ class EasyChessGui:
         if type(button) is tuple:
             # If fr_sq button is pressed
             if self.move_state == 0:
-                self.move_from = button
-                fr_row, fr_col = self.move_from
-                piece = self.psg_board[fr_row][fr_col]  # get the move-from piece
+                self.move_from = Square(rank_id = button[0], file_id = button[1])
 
                 # Change the color of the "fr" board square
-                self.change_square_color(self.window, fr_row, fr_col)
+                self.highlight_squares(((self.move_from, yellow),))
 
                 self.move_state = 1
-                moved_piece = self.board.piece_type_at(chess.square(fr_col, 7-fr_row))  # Pawn=1
 
                 return None
 
             # Else if to_sq button is pressed
             elif self.move_state == 1:
-                move_to = button
-                fr_row, fr_col = self.move_from
-                to_row, to_col = move_to
-                moved_piece = self.board.piece_type_at(chess.square(fr_col, 7-fr_row))
-                button_square = self.window.find_element(key=(fr_row, fr_col))
+                move_to = Square(rank_id = button[0], file_id = button[1])
+                to_row, to_col = move_to.tuple
+                moved_piece = self.board.piece_type_at(self.move_from.internal_square)
+                button_square = self.window.find_element(key=self.move_from.tuple)
 
                 # If move is cancelled, pressing same button twice
                 if move_to == self.move_from:
                     # Restore the color of the pressed board square
-                    color = self.sq_dark_color if (to_row + to_col + self.mirrored) % 2 else self.sq_light_color
-
-                    # Restore the color of the fr square
-                    button_square.Update(button_color=('white', color))
+                    color = dark_gray if (to_row + to_col + self.mirrored) % 2 else light_gray
+                    self._set_element_color_rgb(button_square, color)
                     self.move_state = 0
                     return None
 
@@ -804,16 +791,13 @@ class EasyChessGui:
                 # Get the fr_sq and to_sq of the move from user, based from this info
                 # we will create a move based from python-chess format.
                 # Note chess.square() and chess.Move() are from python-chess module
-                fr_row, fr_col = self.move_from
-                fr_sq = chess.square(fr_col, 7-fr_row)
-                to_sq = chess.square(to_col, 7-to_row)
 
                 # If user move is a promote
-                if self.relative_row(s=to_sq, stm=self.board.turn) == RANK_8 and moved_piece == chess.PAWN:
+                if self.relative_row(s=move_to, stm=self.board.turn) == RANK_8 and moved_piece == chess.PAWN:
                     pyc_promo, psg_promo = self.get_promo_piece(move=user_move, stm=self.board.turn, human=True)
-                    user_move = chess.Move(fr_sq, to_sq, promotion=pyc_promo)
+                    user_move = chess.Move(self.move_from.internal_square, move_to.internal_square, promotion=pyc_promo)
                 else:
-                    user_move = chess.Move(fr_sq, to_sq)
+                    user_move = chess.Move(self.move_from.internal_square, move_to.internal_square)
 
                 # Check if user move is legal
                 if user_move in list(self.board.legal_moves):
@@ -825,11 +809,11 @@ class EasyChessGui:
                 # Else if move is illegal
                 else:
                     self.move_state = 0
-                    color = self.sq_dark_color \
-                        if (self.move_from[0] + self.move_from[1] + self.mirrored) % 2 else self.sq_light_color
+                    color = dark_gray \
+                        if (self.move_from.tuple[0] + self.move_from.tuple[1] + self.mirrored) % 2 else light_gray
 
                     # Restore the color of the fr square
-                    button_square.Update(button_color=('white', color))
+                    self._set_element_color_rgb(button_square, color)
                     return None
                 
         return window_read_result
@@ -854,12 +838,9 @@ class EasyChessGui:
         """Return a dict of all sub-variations from this position, keyed by the move that results in them."""
         return {i.move: i for i in self.game_node.variations}
                 
-    def play_move(self, move: chess.Move):
+    def play_move(self, move: Move):
         """Update the current board state with the given move, highlighting what's changed."""
-        try:
-            playsound.playsound("sounds\\move-self.mp3", block=False)
-        except playsound.PlaysoundException as e:
-            self.console_output.print(e.args)
+        self.play_sound("sounds\\move-self.mp3")
         if move in self.moves.keys():
             self.game_node = self.moves[move]
             return None
@@ -873,31 +854,21 @@ class EasyChessGui:
 
         :return: board layout
         """
-        file_char_name = 'abcdefgh'
         self._psg_board = copy.deepcopy(initial_board)
 
         board_layout = []
 
-        if self.board_perspective == chess.WHITE:
-            # Save the board with black at the top        
-            start = 0
-            end = 8
-            step = 1
-        else:
-            start = 7
-            end = -1
-            step = -1
-            file_char_name = file_char_name[::-1]
-
         # Loop through the board and create buttons with images
-        for i in range(start, end, step):
+        for i in range(8):
             # Row numbers at left of board is blank
             row = []
-            for j in range(start, end, step):
+            for j in range(8):
                 piece_image = images[self.psg_board[i][j]]
                 row.append(self.render_square(piece_image, key=(i, j), location=(i, j)))
             board_layout.append(row)
 
+        if self.board_perspective == chess.WHITE:
+            board_layout = list(reversed(board_layout))  # PySimpleGUI draws from top to bottom, so we need to reverse the order of the rows
         return board_layout
 
     def build_main_layout(self):
@@ -1069,10 +1040,7 @@ class EasyChessGui:
                                                          time_taken_seconds=(datetime.datetime.now() - self.current_puzzle_start_time).total_seconds())
                             
                             def puzzle_fail() -> None:
-                                try:
-                                    playsound.playsound(sound="sounds//error-when-entering-the-game-menu-132111.mp3", block=False)
-                                except playsound.PlaysoundException as e:
-                                    self.console_output.print(e.args)
+                                self.play_sound(sound="sounds//error-when-entering-the-game-menu-132111.mp3")
                                 self.popup_display_text(popup_title="Puzzle Result", text=f"""Not Quite!\n"""
                                                                                           f"""Best Move Eval: {self.current_puzzle.evaluation}\n"""
                                                                                           f"""Goal Eval: {goal_eval}\n"""
@@ -1080,18 +1048,12 @@ class EasyChessGui:
                                                                                           f"""Your Last Try: {self.current_puzzle.latest_practice_eval}\n"""
                                                                                           f"""This Try: {new_eval}""")
                                 print(f"FAIL:: Target Eval ({goal_eval}) - Your Eval ({new_eval})")
-                                self.highlight_error_square(window=self.window, row=7-chess.square_rank(window_read_result.from_square), col=chess.square_file(window_read_result.from_square))
-                                self.highlight_error_square(window=self.window, row=7-chess.square_rank(window_read_result.to_square), col=chess.square_file(window_read_result.to_square))
+                                self.highlight_moves(square_colour_tuple=((window_read_result, red),))
                             def puzzle_success() -> None:
-                                try:
-                                    playsound.playsound(sound="sounds//success-1-6297.mp3", block=False)
-                                except playsound.PlaysoundException as e:
-                                    self.console_output.print(e.args)
+                                self.play_sound("sounds//success-1-6297.mp3")
                                 print(f"SUCCESS:: Target Eval ({goal_eval}) - Your Eval ({new_eval})")
-                                self.highlight_error_square(window=self.window, row=7-chess.square_rank(self.current_puzzle.latest_attempt_move_object.from_square), col=chess.square_file(self.current_puzzle.latest_attempt_move_object.from_square))
-                                self.highlight_error_square(window=self.window, row=7-chess.square_rank(self.current_puzzle.latest_attempt_move_object.to_square), col=chess.square_file(self.current_puzzle.latest_attempt_move_object.to_square))
-                                self.highlight_success_square(window=self.window, row=7-chess.square_rank(window_read_result.to_square), col=chess.square_file(window_read_result.to_square))
-                                self.highlight_success_square(window=self.window, row=7-chess.square_rank(window_read_result.from_square), col=chess.square_file(window_read_result.from_square))
+                                self.highlight_moves(square_colour_tuple=((self.current_puzzle.latest_attempt_move_object, red),
+                                                                          (window_read_result, green)))
 
                             self.play_move(move=window_read_result)
 
@@ -1147,20 +1109,18 @@ class EasyChessGui:
                     this_attempt_next_position.push(window_read_result)
                     
                     def game_review_fail() -> None:
-                        playsound.playsound(sound="sounds//error-when-entering-the-game-menu-132111.mp3", block=False)
+                        self.play_sound("sounds//error-when-entering-the-game-menu-132111.mp3")
                         print(f"FAIL:: Target Eval ({goal_eval}) - Your Eval ({new_eval})")
                         # Let's try to find a refutation to understand properly why it's not a good move
                         if original_next_position is not None:
-                            if original_next_position.move == window_read_result:
-                                self.highlight_error_square(window=self.window, row=7-chess.square_rank(window_read_result.from_square), col=chess.square_file(window_read_result.from_square))
-                                self.highlight_error_square(window=self.window, row=7-chess.square_rank(window_read_result.to_square), col=chess.square_file(window_read_result.to_square))
-                                return None
-                        # If it was the actual next move, we'll find the refutation later!
-                        self.play_move(move=window_read_result)
-                        self.review_attempt = 0
+                            if original_next_position.move != window_read_result:
+                                # If it was the actual next move, we'll find the refutation later!
+                                self.play_move(move=window_read_result)
+                                self.review_attempt = 0
+                        self.highlight_moves(square_colour_tuple=((window_read_result, red),))
 
                     def game_review_success() -> None:
-                        playsound.playsound(sound="sounds//success-1-6297.mp3", block=False)
+                        self.play_sound("sounds//success-1-6297.mp3")
                         print(f"SUCCESS:: Target Eval ({goal_eval}) - Your Eval ({new_eval})")
 
                         if self.game_node.is_mainline():
@@ -1172,16 +1132,12 @@ class EasyChessGui:
                                 original_game_eval: float = self.stable_evaluation(min_depth=23, min_nodes=5000, max_depth=30, max_instability=0.009, board=original_next_position.board())
                                 if self.turn != chess.WHITE:
                                     if new_eval > original_game_eval:
-                                        self.highlight_error_square(window=self.window, row=7-chess.square_rank(original_move.from_square), col=chess.square_file(original_move.from_square))
-                                        self.highlight_error_square(window=self.window, row=7-chess.square_rank(original_move.to_square), col=chess.square_file(original_move.to_square))
-                                        self.highlight_success_square(window=self.window, row=7-chess.square_rank(window_read_result.to_square), col=chess.square_file(window_read_result.to_square))
-                                        self.highlight_success_square(window=self.window, row=7-chess.square_rank(window_read_result.from_square), col=chess.square_file(window_read_result.from_square))
+                                        self.highlight_moves(((original_move, red),
+                                                              (window_read_result, green)))
                                 else:
                                     if new_eval < original_game_eval:
-                                        self.highlight_error_square(window=self.window, row=7-chess.square_rank(original_move.from_square), col=chess.square_file(original_move.from_square))
-                                        self.highlight_error_square(window=self.window, row=7-chess.square_rank(original_move.to_square), col=chess.square_file(original_move.to_square))
-                                        self.highlight_success_square(window=self.window, row=7-chess.square_rank(window_read_result.to_square), col=chess.square_file(window_read_result.to_square))
-                                        self.highlight_success_square(window=self.window, row=7-chess.square_rank(window_read_result.from_square), col=chess.square_file(window_read_result.from_square))
+                                        self.highlight_moves(((original_move, red),
+                                                              (window_read_result, green)))
                             else:
                                 self.play_move(move=window_read_result)
                         else:
