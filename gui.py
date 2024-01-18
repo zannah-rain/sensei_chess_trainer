@@ -189,6 +189,12 @@ class EasyChessGui:
         self.move_state = 0
         self.move_from = None
 
+    def play_sound(self, sound_file: Path) -> None:
+        try:
+            playsound.playsound(sound=sound_file, block=False)
+        except playsound.PlaysoundException as e:
+            self.console_output.print(e.args)
+
     @property
     def current_puzzle(self) -> Puzzle:
         return self._current_puzzle
@@ -856,10 +862,7 @@ class EasyChessGui:
                 
     def play_move(self, move: chess.Move):
         """Update the current board state with the given move, highlighting what's changed."""
-        try:
-            playsound.playsound("sounds\\move-self.mp3", block=False)
-        except playsound.PlaysoundException as e:
-            self.console_output.print(e.args)
+        self.play_sound("sounds\\move-self.mp3")
         if move in self.moves.keys():
             self.game_node = self.moves[move]
             return None
@@ -1069,10 +1072,7 @@ class EasyChessGui:
                                                          time_taken_seconds=(datetime.datetime.now() - self.current_puzzle_start_time).total_seconds())
                             
                             def puzzle_fail() -> None:
-                                try:
-                                    playsound.playsound(sound="sounds//error-when-entering-the-game-menu-132111.mp3", block=False)
-                                except playsound.PlaysoundException as e:
-                                    self.console_output.print(e.args)
+                                self.play_sound(sound="sounds//error-when-entering-the-game-menu-132111.mp3")
                                 self.popup_display_text(popup_title="Puzzle Result", text=f"""Not Quite!\n"""
                                                                                           f"""Best Move Eval: {self.current_puzzle.evaluation}\n"""
                                                                                           f"""Goal Eval: {goal_eval}\n"""
@@ -1083,10 +1083,7 @@ class EasyChessGui:
                                 self.highlight_error_square(window=self.window, row=7-chess.square_rank(window_read_result.from_square), col=chess.square_file(window_read_result.from_square))
                                 self.highlight_error_square(window=self.window, row=7-chess.square_rank(window_read_result.to_square), col=chess.square_file(window_read_result.to_square))
                             def puzzle_success() -> None:
-                                try:
-                                    playsound.playsound(sound="sounds//success-1-6297.mp3", block=False)
-                                except playsound.PlaysoundException as e:
-                                    self.console_output.print(e.args)
+                                self.play_sound("sounds//success-1-6297.mp3")
                                 print(f"SUCCESS:: Target Eval ({goal_eval}) - Your Eval ({new_eval})")
                                 self.highlight_error_square(window=self.window, row=7-chess.square_rank(self.current_puzzle.latest_attempt_move_object.from_square), col=chess.square_file(self.current_puzzle.latest_attempt_move_object.from_square))
                                 self.highlight_error_square(window=self.window, row=7-chess.square_rank(self.current_puzzle.latest_attempt_move_object.to_square), col=chess.square_file(self.current_puzzle.latest_attempt_move_object.to_square))
@@ -1147,20 +1144,20 @@ class EasyChessGui:
                     this_attempt_next_position.push(window_read_result)
                     
                     def game_review_fail() -> None:
-                        playsound.playsound(sound="sounds//error-when-entering-the-game-menu-132111.mp3", block=False)
+                        self.play_sound("sounds//error-when-entering-the-game-menu-132111.mp3")
                         print(f"FAIL:: Target Eval ({goal_eval}) - Your Eval ({new_eval})")
                         # Let's try to find a refutation to understand properly why it's not a good move
                         if original_next_position is not None:
-                            if original_next_position.move == window_read_result:
-                                self.highlight_error_square(window=self.window, row=7-chess.square_rank(window_read_result.from_square), col=chess.square_file(window_read_result.from_square))
-                                self.highlight_error_square(window=self.window, row=7-chess.square_rank(window_read_result.to_square), col=chess.square_file(window_read_result.to_square))
-                                return None
-                        # If it was the actual next move, we'll find the refutation later!
-                        self.play_move(move=window_read_result)
-                        self.review_attempt = 0
+                            if original_next_position.move != window_read_result:
+                                # If it was the actual next move, we'll find the refutation later!
+                                self.play_move(move=window_read_result)
+                                self.review_attempt = 0
+                        self.highlight_error_square(window=self.window, row=7-chess.square_rank(window_read_result.from_square), col=chess.square_file(window_read_result.from_square))
+                        self.highlight_error_square(window=self.window, row=7-chess.square_rank(window_read_result.to_square), col=chess.square_file(window_read_result.to_square))
+                        
 
                     def game_review_success() -> None:
-                        playsound.playsound(sound="sounds//success-1-6297.mp3", block=False)
+                        self.play_sound("sounds//success-1-6297.mp3")
                         print(f"SUCCESS:: Target Eval ({goal_eval}) - Your Eval ({new_eval})")
 
                         if self.game_node.is_mainline():
