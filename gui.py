@@ -187,6 +187,12 @@ class EasyChessGui:
         self.move_state = 0
         self.move_from = None
 
+    def play_sound(self, sound_file: Path) -> None:
+        try:
+            playsound.playsound(sound=sound_file, block=False)
+        except playsound.PlaysoundException as e:
+            self.console_output.print(e.args)
+
     @property
     def move_from(self) -> Square:
         return self._move_from
@@ -1117,6 +1123,7 @@ class EasyChessGui:
                                 # If it was the actual next move, we'll find the refutation later!
                                 self.play_move(move=window_read_result)
                                 self.review_attempt = 0
+
                         self.highlight_moves(square_colour_tuple=((window_read_result, red),))
 
                     def game_review_success() -> None:
