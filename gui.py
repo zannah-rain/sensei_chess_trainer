@@ -875,6 +875,8 @@ class EasyChessGui:
 
         if self.board_perspective == chess.WHITE:
             board_layout = list(reversed(board_layout))  # PySimpleGUI draws from top to bottom, so we need to reverse the order of the rows
+        else:
+            board_layout = [list(reversed(i)) for i in board_layout]
         return board_layout
 
     def build_main_layout(self):
@@ -1124,7 +1126,7 @@ class EasyChessGui:
                                 self.play_move(move=window_read_result)
                                 self.review_attempt = 0
 
-                        self.highlight_moves(square_colour_tuple=((window_read_result, red),))
+                        self.highlight_moves(move_colour_tuple=((window_read_result, red),))
 
                     def game_review_success() -> None:
                         self.play_sound("sounds//success-1-6297.mp3")
