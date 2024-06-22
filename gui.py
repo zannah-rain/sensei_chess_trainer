@@ -694,7 +694,7 @@ class EasyChessGui:
         """
         for i in range(8):
             for j in range(8):
-                color = dark_gray if (i + j + self.mirrored) % 2 else \
+                color = dark_gray if (i + j + self.mirrored + 1) % 2 else \
                         light_gray
                 piece_image = images[self.psg_board[i][j]]
                 elem = self.window.find_element(key=(i, j))
@@ -780,7 +780,7 @@ class EasyChessGui:
                 # If move is cancelled, pressing same button twice
                 if move_to == self.move_from:
                     # Restore the color of the pressed board square
-                    color = dark_gray if (to_row + to_col + self.mirrored) % 2 else light_gray
+                    color = dark_gray if (to_row + to_col + self.mirrored + 1) % 2 else light_gray
                     self._set_element_color_rgb(button_square, color)
                     self.move_state = 0
                     return None
