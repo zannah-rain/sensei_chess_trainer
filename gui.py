@@ -202,12 +202,6 @@ class EasyChessGui:
         assert isinstance(value, Square) or value is None
         self._move_from = value
 
-    def play_sound(self, sound_file: Path) -> None:
-        try:
-            playsound.playsound(sound=sound_file, block=False)
-        except playsound.PlaysoundException as e:
-            self.console_output.print(e.args)
-
     @property
     def current_puzzle(self) -> Puzzle:
         return self._current_puzzle
