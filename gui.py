@@ -36,7 +36,6 @@ col is the same as in PySimpleGUI
 """
 
 import PySimpleGUI as sg
-import os
 import sys
 import queue
 import copy
@@ -49,14 +48,12 @@ import platform as sys_plat
 from utils.constants import *
 from utils.position import *
 from utils.puzzle import Puzzle
-from utils.engine import Engine, EngineEvaluationResult
 from zPosition import zPosition
 from pathlib import Path
 from typing import Dict
 from utils.database import Database, position_to_fen
 import json
 from utils.settings import Settings
-import psutil
 from globals import username
 import datetime
 import playsound
@@ -66,6 +63,7 @@ from utils.promotion_select_window import select_promotion_piece
 from textwrap import dedent
 from io import StringIO
 from utils.gui import RoundedButton
+import utils.combined_engines
 
 logging.basicConfig(level=logging.INFO)
 
@@ -108,17 +106,17 @@ class EasyChessGui:
     
     def __init__(self, theme):
         # Initialise hidden stuff first as properties might depend on them existing
-        self._stockfish = None
-        self._leela = None
+        self.settings = Settings(schema={"Stockfish Executable": "Path",
+                                         "Leela Executable": "Path"},
+                                 save_file=Path("EasyChessGuiSettings.json"),
+                                 settings_screen_title="Sensei Settings:")
+
         self._board_perspective = None
         self._mirrored = False
 
         self.database = Database()
 
-        self.settings = Settings(schema={"Stockfish Executable": "Path",
-                                         "Leela Executable": "Path"},
-                                 save_file=Path("EasyChessGuiSettings.json"),
-                                 settings_screen_title="Sensei Settings:")
+        self.combined_engines = utils.combined_engines.CombinedEngines(settings=self.settings, database=self.database)
 
         self.theme: str = theme
         self.gui_theme: str = theme
@@ -204,29 +202,6 @@ class EasyChessGui:
         """The time the current puzzle was started"""
         return self._current_puzzle_start_time
 
-    def engines(self) -> Dict[str, Engine]:
-        return {"stockfish": self.stockfish(), "leela": self.leela()}
-    
-    def stockfish(self) -> Engine:
-        if self._stockfish is None:
-            print("Starting Stockfish")
-            self._stockfish = Engine(engine=chess.engine.SimpleEngine.popen_uci(self.settings["Stockfish Executable"]), 
-                                     name="stockfish",
-                                     depth_parameter="depth")
-            self._stockfish.configure({"Hash": int(psutil.virtual_memory().available / 1024 / 1024 * 0.3)})  # 75% of available ram
-            self._stockfish.configure({"Threads": int(psutil.cpu_count(logical=True) - 3)})
-        
-        return self._stockfish
-
-    def leela(self) -> Engine:
-        if self._leela is None:
-            print("Starting Leela")
-            self._leela = Engine(engine=chess.engine.SimpleEngine.popen_uci(self.settings["Leela Executable"]), 
-                                 name="leela",
-                                 depth_parameter="nodes")
-        
-        return self._leela
-
     @property
     def game(self) -> chess.pgn.Game:
         return self._game
@@ -239,52 +214,6 @@ class EasyChessGui:
     @property
     def game_node(self) -> chess.pgn.GameNode:
         return self._game_node
-    
-    def stockfish_evaluation(self, depth, board=None) -> EngineEvaluationResult:
-        if board is None:
-            board = self.board
-        return self.database.engine_evaluation(board=board, engine=self.stockfish(), depth_value=depth)
-    
-    def leela_evaluation(self, nodes, board=None) -> EngineEvaluationResult:
-        if board is None:
-            board = self.board
-        return self.database.engine_evaluation(board=board, engine=self.leela(), depth_value=nodes)
-    
-    def combined_evaluation(self, depth, nodes, board=None) -> float:
-        if board is None:
-            board = self.board
-        self.stockfish_evaluation(depth, board=board)
-        self.leela_evaluation(nodes, board=board)
-        return self.database.read_combined_engine_evaluation(board=board)
-    
-    def stable_evaluation(self, min_depth, min_nodes, max_depth, max_instability: float, board=None) -> float:
-        """
-        To help in situations where evaluation is very unstable (and can move a lot from one ply to the next).
-        Keeps increasing depth until the difference in evaluation from one step to another is less than max_instability.
-        """
-        if board is None:
-            board = self.board
-
-        current_depth = min_depth
-        current_nodes = min_nodes
-
-        while current_depth < max_depth:
-            current_eval = self.combined_evaluation(depth=current_depth, nodes=current_nodes, board=board)
-
-            engine_move = self.database.engine_move(board=board, engine=self.stockfish(), depth_value=current_depth, multipv=1)
-            engine_next_position = board.copy()
-            engine_next_position.push(engine_move)
-            next_eval = self.combined_evaluation(depth=current_depth, nodes=current_nodes, board=engine_next_position)
-
-            if abs(next_eval - current_eval) > max_instability:
-                current_depth += 4
-                current_nodes += 5000
-                print(f"Unstable engine evaluation, increasing depth to {current_depth}")
-                continue
-
-            return next_eval
-        
-        return next_eval
     
     @property
     def turn(self) -> bool:
@@ -337,8 +266,8 @@ class EasyChessGui:
         else:
             self.text_output_board_date_seen.update(f"Position not seen in a real game")
 
-        stockfish_eval = self.stockfish_evaluation(depth=10)
-        leela_eval = self.leela_evaluation(nodes=100)
+        stockfish_eval = self.combined_engines.stockfish_evaluation(depth=10, board=self.board)
+        leela_eval = self.combined_engines.leela_evaluation(nodes=100, board=self.board)
         if self.mirrored:
             stockfish_eval = 1 - stockfish_eval
             leela_eval = 1 - leela_eval
@@ -1018,8 +947,7 @@ class EasyChessGui:
             if button is None:
                 logging.info(msg='Quit app from main loop, X is pressed.')
                 self.database.close_and_optimise()
-                self.stockfish().engine.close()
-                self.leela().engine.close()
+                self.combined_engines.close()
                 break
 
             if value["review_comment_key"] != self.review_comment:
@@ -1073,12 +1001,12 @@ class EasyChessGui:
 
                             self.play_move(move=window_read_result)
 
-                            engine_move: chess.Move = self.database.engine_move(board=self.board, engine=self.stockfish(), depth_value=23, multipv=1)
+                            engine_move: chess.Move = self.database.engine_move(board=self.board, engine=self.combined_engines.stockfish(), depth_value=23, multipv=1)
                             if engine_move == window_read_result:
                                 puzzle_success()
                                 continue
 
-                            new_eval: float = self.stable_evaluation(min_depth=10, min_nodes=1000, max_depth=30, max_instability=0.009)
+                            new_eval: float = self.combined_engines.stable_evaluation(min_depth=10, min_nodes=1000, max_depth=30, max_instability=0.009)
 
                             # Want to move at least 5% towards the best move to consider myself 'improving' (otherwise 'success' can mean going from 99.9% loss to 99.8% when there's a way out)
                             if self.current_puzzle.whose_turn == chess.WHITE:
@@ -1147,7 +1075,7 @@ class EasyChessGui:
                                 # Proceed to the next actual position from the game
                                 self.play_move(move=original_next_position.move)
                                 original_move = original_next_position.move
-                                original_game_eval: float = self.stable_evaluation(min_depth=23, min_nodes=5000, max_depth=30, max_instability=0.009, board=original_next_position.board())
+                                original_game_eval: float = self.combined_engines.stable_evaluation(min_depth=23, min_nodes=5000, max_depth=30, max_instability=0.009, board=original_next_position.board())
                                 if self.turn != chess.WHITE:
                                     if new_eval > original_game_eval:
                                         self.highlight_error_square(window=self.window, row=7-chess.square_rank(original_move.from_square), col=chess.square_file(original_move.from_square))
@@ -1168,13 +1096,13 @@ class EasyChessGui:
                             self.game_node = self.game_node.parent
                             self.review_attempt = 999
 
-                    engine_move: chess.Move = self.database.engine_move(board=self.board, engine=self.stockfish(), depth_value=23, multipv=1)
+                    engine_move: chess.Move = self.database.engine_move(board=self.board, engine=self.combined_engines.stockfish(), depth_value=23, multipv=1)
                     engine_move_position = self.game_node.board().copy()
                     engine_move_position.push(engine_move)
 
-                    current_eval: float = self.stable_evaluation(min_depth=23, min_nodes=5000, max_depth=30, max_instability=0.009)
-                    current_eval_2: float = self.stable_evaluation(min_depth=23, min_nodes=5000, max_depth=30, max_instability=0.009, board=engine_move_position)
-                    new_eval: float = self.stable_evaluation(min_depth=23, min_nodes=5000, max_depth=30, max_instability=0.009, board=this_attempt_next_position)
+                    current_eval: float = self.combined_engines.stable_evaluation(min_depth=23, min_nodes=5000, max_depth=30, max_instability=0.009)
+                    current_eval_2: float = self.combined_engines.stable_evaluation(min_depth=23, min_nodes=5000, max_depth=30, max_instability=0.009, board=engine_move_position)
+                    new_eval: float = self.combined_engines.stable_evaluation(min_depth=23, min_nodes=5000, max_depth=30, max_instability=0.009, board=this_attempt_next_position)
 
                     if engine_move == window_read_result:
                         goal_eval = current_eval
@@ -1184,7 +1112,7 @@ class EasyChessGui:
                     if original_next_position is not None:
                         # There is a next move in the game already (either a mainline move or an already explored sub-variation)
                         original_move = original_next_position.move
-                        original_game_eval: float = self.stable_evaluation(min_depth=23, min_nodes=5000, max_depth=30, max_instability=0.009, board=original_next_position.board())
+                        original_game_eval: float = self.combined_engines.stable_evaluation(min_depth=23, min_nodes=5000, max_depth=30, max_instability=0.009, board=original_next_position.board())
 
                         # Want to move at least 5% towards the best move to consider myself 'improving' (otherwise 'success' can mean going from 99.9% loss to 99.8% when there's a way out)
                         if self.turn == chess.WHITE:
@@ -1229,7 +1157,7 @@ class EasyChessGui:
 
             if button == "Engine Move":
                 self.puzzle_attempt += 1
-                self.play_move(self.database.engine_move(board=self.board, engine=self.stockfish(), depth_value=20, multipv=1))
+                self.play_move(self.database.engine_move(board=self.board, engine=self.combined_engines.stockfish(), depth_value=20, multipv=1))
                 continue
 
             if button == "Open .pgn":
@@ -1263,8 +1191,8 @@ class EasyChessGui:
                 continue
 
             if button == "Build puzzles":
-                self.database.full_engine_evaluation(engine=self.stockfish(), depth_value=10)
-                self.database.full_engine_evaluation(engine=self.leela(), depth_value=500)
+                self.database.full_engine_evaluation(engine=self.combined_engines.stockfish(), depth_value=10)
+                self.database.full_engine_evaluation(engine=self.combined_engines.leela(), depth_value=500)
                 continue
 
             if button == "Time Controls":
