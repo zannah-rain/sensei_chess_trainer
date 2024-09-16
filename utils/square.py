@@ -3,10 +3,40 @@ import chess
 
 class Square:
 
-    def __init__(self, square_id: chess.Square):
+    def __init__(self, square_id: chess.Square = None, rank_id: int = None, file_id: int = None):
         """Just a mini class to signpost useful functionality in chess"""
 
-        self.id = square_id
+        if square_id is not None:
+            self.id = square_id
+        elif rank_id is not None and file_id is not None:
+            self.id = chess.square(rank_index=rank_id, file_index=file_id)
+
+    def __repr__(self):
+        return f"Square({self.id}) {self.file}{self.rank}"
+    
+    def __str__(self):
+        return f"{self.file}{self.rank}"
+    
+    def __eq__(self, other):
+        if isinstance(other, Square):
+            return self.id == other.id
+        elif isinstance(other, int):
+            return self.id == other
+        else:
+            return False
+    
+    def __hash__(self):
+        return hash(self.id)
+    
+    @property
+    def internal_square(self) -> int:
+        """0-63"""
+        return self.id
+    
+    @property
+    def tuple(self) -> tuple:
+        """(rank_id, file_id)"""
+        return (self.rank_id, self.file_id)
 
     @property
     def file_id(self) -> int:
