@@ -274,3 +274,7 @@ class Engine:
     
     def configure(self, options: chess.engine.ConfigMapping) -> None:
          self.engine.configure(options=options)
+
+    def close(self) -> None:
+        """Close the engine"""
+        self.engine.close()
