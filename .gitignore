@@ -8,3 +8,7 @@
 engines/
 utils/__pycache__/
 chess_database.db
+EasyChessGuiSettings.json
+.vscode/launch.json
+pgns/*
+*.pgn
