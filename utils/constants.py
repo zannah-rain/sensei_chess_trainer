@@ -1,5 +1,6 @@
 import os
 import chess
+from PySide6.QtGui import QPixmap
  
 
 ico_path = {'win32': {'pecg': 'Icon/pecg.ico', 
@@ -74,9 +75,26 @@ images = {BISHOPB: bishopB, BISHOPW: bishopW, PAWNB: pawnB, PAWNW: pawnW,
           ROOKB: rookB, ROOKW: rookW, KINGB: kingB, KINGW: kingW,
           QUEENB: queenB, QUEENW: queenW, BLANK: blank}
 
-
 # Promote piece from psg (pysimplegui) to pyc (python-chess)
 promote_psg_to_pyc = {KNIGHTB: chess.KNIGHT, BISHOPB: chess.BISHOP,
                       ROOKB: chess.ROOK, QUEENB: chess.QUEEN,
                       KNIGHTW: chess.KNIGHT, BISHOPW: chess.BISHOP,
                       ROOKW: chess.ROOK, QUEENW: chess.QUEEN,}
+
+
+# Default board color is brown
+light_gray = (224, 224, 224)
+dark_gray = (158, 158, 158)
+red = (255, 0, 0)
+green = (0, 255, 0)
+blue = (0, 0, 255)
+purple = (160, 32, 255)
+yellow = (255, 224, 32)
+orange = (255, 128, 0)
+
+APP_NAME = 'Sensei'
+APP_VERSION = 'V2.0.0'
+BOX_TITLE = '{} {}'.format(APP_NAME, APP_VERSION)
+
+MIN_DEPTH = 1
+MAX_DEPTH = 1000

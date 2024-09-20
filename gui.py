@@ -1,44 +1,8 @@
 #!/usr/bin/env python3
-""" 
-python_easy_chess_gui.py
-
-Requirements:
-    Python 3.7.3 and up
-
-PySimpleGUI Square Mapping
-board = [
-    56, 57, ... 63
-    ...
-    8, 9, ...
-    0, 1, 2, ...
-]
-
-row = [
-    0, 0, ...
-    1, 1, ...
-    ...
-    7, 7 ...
-]
-
-col = [
-    0, 1, 2, ... 7
-    0, 1, 2, ...
-    ...
-    0, 1, 2, ... 7
-]
-
-
-Python-Chess Square Mapping
-board is the same as in PySimpleGUI
-row is reversed
-col is the same as in PySimpleGUI
-
-"""
 
 import PySimpleGUI as sg
 import sys
 import queue
-import copy
 import chess
 import chess.pgn
 import chess.engine
@@ -52,11 +16,9 @@ from zPosition import zPosition
 from pathlib import Path
 from typing import Dict, Tuple
 from utils.database import Database, position_to_fen
-import json
 from utils.settings import Settings
 from globals import username
 import datetime
-import playsound
 import random
 import pandas as pd
 from utils.promotion_select_window import select_promotion_piece
@@ -67,18 +29,12 @@ import utils.combined_engines
 import utils.colours
 from utils.square import Square
 from utils.move import Move
+from utils.gui_board import GUIBoard
 
 logging.basicConfig(level=logging.INFO)
 
 platform = sys.platform
 sys_os = sys_plat.system()
-
-APP_NAME = 'Sensei'
-APP_VERSION = 'v1.0.0'
-BOX_TITLE = '{} {}'.format(APP_NAME, APP_VERSION)
-
-MIN_DEPTH = 1
-MAX_DEPTH = 1000
 
 
 menu_def_neutral = [
@@ -101,18 +57,7 @@ menu_def_neutral = [
 def ifnone(x, y):
     if x is None:
         return y
-    return x
-
-
-# Default board color is brown
-light_gray = (224, 224, 224)
-dark_gray = (158, 158, 158)
-red = (255, 0, 0)
-green = (0, 255, 0)
-blue = (0, 0, 255)
-purple = (160, 32, 255)
-yellow = (255, 224, 32)
-orange = (255, 128, 0)
+    return 
 
 
 class EasyChessGui:
@@ -120,6 +65,9 @@ class EasyChessGui:
     
     def __init__(self, theme):
         # Initialise hidden stuff first as properties might depend on them existing
+
+        self.gui_board = GUIBoard()
+
         self.settings = Settings(schema={"Stockfish Executable": "Path",
                                          "Leela Executable": "Path"},
                                  save_file=Path("EasyChessGuiSettings.json"),
@@ -186,6 +134,7 @@ class EasyChessGui:
         self.move_from = None
 
     def play_sound(self, sound_file: Path) -> None:
+        import playsound
         try:
             playsound.playsound(sound=sound_file, block=False)
         except playsound.PlaysoundException as e:
@@ -235,14 +184,18 @@ class EasyChessGui:
         return self.game_node.turn()  # Does NOT account for mirroring, this is the underlying value that can be fed to engines etc
     
     @property
+    def mirrored(self) -> bool:
+        """Whether the board is mirrored or not"""
+        return self.gui_board.mirrored
+    
+    @property
     def mirror_aware_turn(self) -> bool:
-        return (self.turn + self._mirrored) % 2
+        return (self.turn + self.mirrored) % 2
     
     @game_node.setter
     def game_node(self, value: chess.pgn.GameNode):
         # Update Board
         self._game_node = value
-        self._psg_board = self.fen_to_psg_board()
         self.redraw_board()
 
         self._current_game_review_position_start_time = datetime.datetime.now()
@@ -404,57 +357,8 @@ class EasyChessGui:
         return zPosition(fen=self.fen)
 
     @property
-    def psg_board(self):
-        return self._psg_board
-
-    @property
     def fen(self) -> str:
         return self.board.fen()
-    
-    @property
-    def mirrored(self) -> bool:
-        """Whether the colours have been swapped in displays without changing them in the back end stuff."""
-        return self._mirrored
-    
-    @mirrored.setter
-    def mirrored(self, value) -> None:
-        if value != self.mirrored:
-            self._mirrored = value
-            self.create_new_window()
-            self.game_node = self.game_node
-    
-    @property
-    def board_perspective(self) -> bool:
-        """chess.WHITE (1) or chess.BLACK (0). Determines the perspective the board is drawn from, independently from whos turn it is."""
-        return self._board_perspective
-    
-    @board_perspective.setter
-    def board_perspective(self, value: bool) -> None:
-        if value != self._board_perspective:
-            # Flip da board!
-            self._board_perspective: bool = value
-            self.create_new_window()
-            self.game_node = self.game_node
-
-    def flip_board(self) -> None:
-        """Flips the perspective (NOT THE COLOURS!)"""
-        self.board_perspective = not self.board_perspective
-
-    def randomise_perspective_and_mirroring(self) -> None:
-        new_perspective: bool = random.choice([chess.WHITE, chess.BLACK])
-        new_mirroring: bool = random.choice([True, False])
-
-        if new_perspective != self.board_perspective:
-            if new_mirroring != self.mirrored:
-                self._board_perspective = new_perspective
-                self._mirrored = new_mirroring
-                self.create_new_window()
-                self.game_node = self.game_node
-            else:
-                self.board_perspective = new_perspective
-        else:
-            self.mirrored = new_mirroring
-
 
     def popup_display_table(self, popup_title: str, data: pd.DataFrame) -> None:
         """Display a table of data in a pop up window"""
@@ -511,96 +415,6 @@ class EasyChessGui:
                   [sg.B('OK')]]).read(close=True)
         return event, values
 
-    def fen_to_psg_board(self):
-        """ Update psg_board based on FEN """
-        psgboard = []
-
-        # Get piece locations only to build psg board
-        pc_locations: str = self.fen.split()[0]
-
-        board = chess.BaseBoard(board_fen=pc_locations)
-        old_r = None
-
-        for s in chess.SQUARES:
-            r = chess.square_rank(s)
-
-            if old_r is None:
-                piece_r = []
-            elif old_r != r:
-                psgboard.append(piece_r)
-                piece_r = []
-            elif s == 63:
-                psgboard.append(piece_r)
-
-            try:
-                pc = board.piece_at(s^56)
-            except Exception:
-                pc = None
-                print('Failed to get piece.')
-
-            if pc is not None:
-                pt = pc.piece_type
-                c = (pc.color + self.mirrored) % 2
-                if c:
-                    if pt == chess.PAWN:
-                        piece_r.append(PAWNW)
-                    elif pt == chess.KNIGHT:
-                        piece_r.append(KNIGHTW)
-                    elif pt == chess.BISHOP:
-                        piece_r.append(BISHOPW)
-                    elif pt == chess.ROOK:
-                        piece_r.append(ROOKW)
-                    elif pt == chess.QUEEN:
-                        piece_r.append(QUEENW)
-                    elif pt == chess.KING:
-                        piece_r.append(KINGW)
-                else:
-                    if pt == chess.PAWN:
-                        piece_r.append(PAWNB)
-                    elif pt == chess.KNIGHT:
-                        piece_r.append(KNIGHTB)
-                    elif pt == chess.BISHOP:
-                        piece_r.append(BISHOPB)
-                    elif pt == chess.ROOK:
-                        piece_r.append(ROOKB)
-                    elif pt == chess.QUEEN:
-                        piece_r.append(QUEENB)
-                    elif pt == chess.KING:
-                        piece_r.append(KINGB)
-
-            # Else if pc is None or square is empty
-            else:
-                piece_r.append(BLANK)
-
-            old_r = r
-
-        return list(reversed(psgboard))
-    
-    def _set_element_color_rgb(self, element, color: tuple):
-        """ Set element color based on rgb """
-        hex_color = utils.colours.rgb_to_hex(color)
-        element.Update(button_color=('white', hex_color))
-    
-    def highlight_squares(self, square_colour_tuple: Tuple[Tuple[Square, tuple]], highlight_strength: float = 0.5) -> None:
-        """
-        Change the color of a square based on row & col. Adds the given colour to the base colour of that square.
-        """
-        for square, colour in square_colour_tuple:
-            if isinstance(square, int):
-                square = Square(square)
-            btn_sq = self.window.find_element(key=(square.rank_id, square.file_id))
-            is_dark_square = True if (square.rank_id + square.file_id + self.mirrored) % 2 else False
-            base_color = dark_gray if is_dark_square else light_gray
-            new_color = tuple(round(c1 * (1 - highlight_strength) + c2 * highlight_strength) for c1, c2 in zip(base_color, colour))
-            self._set_element_color_rgb(btn_sq, new_color)
-
-    def highlight_moves(self, move_colour_tuple: tuple, highlight_strength: float = 0.5) -> None:
-        """
-        Change the color of squares relevant to the given moves. Adds the given colour to the base colour of that square.
-        """
-        square_colour_tuple = tuple([(move.from_square, colour) for move, colour in move_colour_tuple]) + tuple([(move.to_square, colour) for move, colour in move_colour_tuple])
-        self.highlight_squares(square_colour_tuple=square_colour_tuple, highlight_strength=highlight_strength)
-
     def relative_row(self, s: Square | chess.Square, stm):
         """
         The board can be viewed, as white at the bottom and black at the
@@ -613,33 +427,6 @@ class EasyChessGui:
         if isinstance(s, Square):
             s = s.id
         return chess.square_rank(s) if stm else 7 - chess.square_rank(s)
-
-    def redraw_board(self):
-        """
-        Redraw board at start and afte a move.
-
-        :param window:
-        :return:
-        """
-        for i in range(8):
-            for j in range(8):
-                color = dark_gray if (i + j + self.mirrored + 1) % 2 else \
-                        light_gray
-                piece_image = images[self.psg_board[i][j]]
-                elem = self.window.find_element(key=(i, j))
-                self._set_element_color_rgb(elem, color)
-                elem.Update(image_filename=piece_image)
-
-    def render_square(self, image, key, location):
-        """ Returns an RButton (Read Button) with image image """
-        if (location[0] + location[1] + self.mirrored) % 2:
-            color = dark_gray  # Dark square
-        else:
-            color = light_gray
-        color = utils.colours.rgb_to_hex(color)
-        return sg.RButton('', image_filename=image, size=(1, 1),
-                          border_width=0, button_color=('white', color),
-                          pad=(0, 0), key=key)
 
     def get_promo_piece(self, move, stm, human):
         """
@@ -710,7 +497,7 @@ class EasyChessGui:
                 if move_to == self.move_from:
                     # Restore the color of the pressed board square
                     color = dark_gray if (to_row + to_col + self.mirrored + 1) % 2 else light_gray
-                    self._set_element_color_rgb(button_square, color)
+                    self.gui_board.set_element_color_rgb(button_square, color)
                     self.move_state = 0
                     return None
 
@@ -742,7 +529,7 @@ class EasyChessGui:
                         if (self.move_from.tuple[0] + self.move_from.tuple[1] + self.mirrored) % 2 else light_gray
 
                     # Restore the color of the fr square
-                    self._set_element_color_rgb(button_square, color)
+                    self.gui_board.set_element_color_rgb(button_square, color)
                     return None
                 
         return window_read_result
@@ -775,32 +562,6 @@ class EasyChessGui:
             return None
         self.game_node = self.game_node.add_variation(move=move)
         return None
-
-    def create_board(self):
-        """
-        Returns board layout based on color of user. If user is white,
-        the white pieces will be at the bottom, otherwise at the top.
-
-        :return: board layout
-        """
-        self._psg_board = copy.deepcopy(initial_board)
-
-        board_layout = []
-
-        # Loop through the board and create buttons with images
-        for i in range(8):
-            # Row numbers at left of board is blank
-            row = []
-            for j in range(8):
-                piece_image = images[self.psg_board[i][j]]
-                row.append(self.render_square(piece_image, key=(i, j), location=(i, j)))
-            board_layout.append(row)
-
-        if self.board_perspective == chess.WHITE:
-            board_layout = list(reversed(board_layout))  # PySimpleGUI draws from top to bottom, so we need to reverse the order of the rows
-        else:
-            board_layout = [list(reversed(i)) for i in board_layout]
-        return board_layout
 
     def build_main_layout(self):
         """
