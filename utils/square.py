@@ -28,6 +28,9 @@ class Square:
     def __hash__(self):
         return hash(self.id)
     
+    def move_to(self, square) -> chess.Move:
+        return chess.Move(from_square=self.id, to_square=square.id)
+    
     @property
     def internal_square(self) -> int:
         """0-63"""
