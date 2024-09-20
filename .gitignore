@@ -12,3 +12,4 @@ EasyChessGuiSettings.json
 .vscode/launch.json
 pgns/*
 *.pgn
+.venv/
