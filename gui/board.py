@@ -92,14 +92,19 @@ class Board(QDialog):
             return light_gray
     
     @property
-    def board(self) -> chess.BaseBoard:
+    def board(self) -> chess.Board:
         return self._board
     
     @board.setter
-    def board(self, value: chess.BaseBoard) -> None:
+    def board(self, value: chess.Board) -> None:
         self._board = value
         self.update_board_pieces_and_colours()
         self.update_labels()
+
+        # Highlight most recent move
+        if self.board.move_stack:
+            move = self.board.peek()
+            self.highlight_moves(move_colour_tuple=[(move, utils.colours.green)], highlight_strength=0.5)
 
     def update_labels(self) -> None:
         """Updates the labels."""
