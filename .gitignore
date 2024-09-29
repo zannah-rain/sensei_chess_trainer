@@ -13,3 +13,7 @@ EasyChessGuiSettings.json
 pgns/*
 *.pgn
 .venv/
+*.db
+*.db-shm
+*.db-wal
+*.pyc
