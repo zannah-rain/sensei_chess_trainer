@@ -26,12 +26,13 @@ import utils.combined_engines
 import utils.colours
 from utils.square import Square
 from utils.move import Move
-from PySide6.QtWidgets import QMainWindow, QVBoxLayout, QFileDialog
+from PySide6.QtWidgets import QMainWindow, QVBoxLayout, QFileDialog, QVBoxLayout, QHBoxLayout, QWidget
 from PySide6.QtGui import QAction
 from gui.board import Board
 from PySide6.QtMultimedia import QSoundEffect, QMediaPlayer, QAudioOutput
-from PySide6.QtCore import QUrl
+from PySide6.QtCore import QUrl, Signal
 from gui.popups import TextboxPopup
+from gui.position_info_widget import PositionInfoWidget
 
 
 logging.basicConfig(level=logging.INFO)
@@ -62,6 +63,9 @@ def ifnone(x, y):
 
 
 class MainWindow(QMainWindow):
+
+    game_node_change_signal = Signal(chess.pgn.GameNode)
+
     def __init__(self) -> None:
         super(MainWindow, self).__init__()
         self.setWindowTitle(f"{APP_NAME} {APP_VERSION}")
@@ -71,8 +75,14 @@ class MainWindow(QMainWindow):
                             save_file=Path("EasyChessGuiSettings.json"),
                             settings_screen_title="Sensei Settings:")
 
+        horizontal_layout = QHBoxLayout()
+        vertical_layout_1 = QVBoxLayout()
+        vertical_layout_2 = QVBoxLayout()
+        horizontal_layout.addLayout(vertical_layout_1)
+        horizontal_layout.addLayout(vertical_layout_2)
+
         self.gui_board = Board()
-        self.setCentralWidget(self.gui_board)
+        vertical_layout_1.addWidget(self.gui_board)
 
         self.init_menu()
 
@@ -87,6 +97,13 @@ class MainWindow(QMainWindow):
         self.audio_player.setAudioOutput(self.audio_output)
 
         self.popup_display_text("Welcome", f"Welcome to {APP_NAME} {APP_VERSION}!")
+
+        self.position_info_widget = PositionInfoWidget(database=self.database)
+        vertical_layout_2.addWidget(self.position_info_widget)
+
+        layout_widget = QWidget()
+        layout_widget.setLayout(horizontal_layout)
+        self.setCentralWidget(layout_widget)
     
     def init_menu(self) -> None:
         self.menu = self.menuBar()
@@ -229,7 +246,7 @@ class MainWindow(QMainWindow):
         return self._current_puzzle
     
     @current_puzzle.setter
-    def current_puzzle(self, value: Puzzle):
+    def current_puzzle(self, value: Puzzle) -> None:
         self._current_puzzle = value
         self._current_puzzle_start_time = datetime.datetime.now()
         self.puzzle_attempt = 0
@@ -306,6 +323,68 @@ class MainWindow(QMainWindow):
         popup = TextboxPopup(title=popup_title, message=text)
         popup.exec()
     
+    @game_node.setter
+    def game_node(self, value: chess.pgn.GameNode):
+        # Update Board
+        self._game_node = value
+        self.game_node_change_signal.emit(value)
+
+        self._current_game_review_position_start_time = datetime.datetime.now()
+
+        # stockfish_eval = self.combined_engines.stockfish_evaluation(depth=25, board=self.board)
+        # leela_eval = self.combined_engines.leela_evaluation(nodes=100_000, board=self.board)
+        # if self.mirrored:
+        #     stockfish_eval = 1 - stockfish_eval
+        #     leela_eval = 1 - leela_eval
+        # 
+        # self.text_output_board_eval_stockfish.update(f"Stockfish evaluation: {stockfish_eval}")
+        # self.text_output_board_eval_leela.update(f"Leela evaluation: {leela_eval}")
+        #      
+        # if self.current_puzzle is not None:
+        #     self.text_output_puzzle_priority.update(f"Review Priority: {self.current_puzzle.priority}")
+        #     self.text_output_puzzle_times_seen_in_real_games.update(f"Times seen in real games: {self.current_puzzle.times_seen_in_real_games}")
+        #     self.text_output_puzzle_last_practiced_date.update(f"Time last practiced: {self.current_puzzle.latest_practiced_timestamp}")
+        #     if self.puzzle_attempt == 0:
+        #         self.text_output_puzzle_latest_real_attempt_evaluation.update(f"Latest real game eval: -hidden-")
+        #         self.text_output_puzzle_latest_real_attempt_evaluation_loss.update(f"Latest real game eval loss: -hidden-")
+        #         self.text_output_puzzle_real_time_control.update(f"Latest real game time control: -hidden-")
+        #         self.text_output_puzzle_latest_attempt_move.update(f"Last try: -hidden-")
+        #         self.text_output_puzzle_latest_attempt_evaluation.update(f"Last eval: -hidden-")
+        #         self.text_output_puzzle_latest_evaluation_loss.update(f"Last eval loss: -hidden-")
+        #         self.text_output_puzzle_latest_time_taken.update(f"Last time taken: -hidden-")
+        #     else:
+        #         latest_real_eval = self.current_puzzle.latest_real_eval
+        #         last_practice_eval = self.current_puzzle.latest_practice_eval
+        #         if self.mirrored:
+        #             latest_real_eval = 1 - latest_real_eval
+        #             last_practice_eval = 1 - last_practice_eval
+        #         self.text_output_puzzle_latest_real_attempt_evaluation.update(f"Latest real game eval: {latest_real_eval}")
+        #         self.text_output_puzzle_latest_real_attempt_evaluation_loss.update(f"Latest real game eval loss: {self.current_puzzle.latest_real_eval_loss}")
+        #         self.text_output_puzzle_real_time_control.update(f"Latest real game time control: {self.current_puzzle.latest_time_control}")
+        #         self.text_output_puzzle_latest_attempt_move.update(f"Last try: {self.current_puzzle.latest_attempt_move}")
+        #         self.text_output_puzzle_latest_attempt_evaluation.update(f"Last eval: {last_practice_eval}")
+        #         self.text_output_puzzle_latest_evaluation_loss.update(f"Last eval loss: {self.current_puzzle.latest_practice_eval_loss}")
+        #         self.text_output_puzzle_latest_time_taken.update(f"Last time taken: {self.current_puzzle.latest_practice_time_taken_seconds}")
+        # else:
+        #     self.text_output_puzzle_priority.update(f"No puzzle loaded.")
+# 
+        # self.text_io_review_comment.update(self.review_comment)
+        # self.table_output_moves.update(values=self.moves_table.values.tolist())
+        # 
+        # if self.review_evaluation is not None:
+        #     review_eval_str = str(self.review_evaluation)
+        # else:
+        #     review_eval_str = ""
+# 
+        # self.text_io_review_evaluation.update(review_eval_str, select=False)
+# 
+        # if self.position_name is not None:
+        #     position_name_str = self.position_name
+        # else:
+        #     position_name_str = ""
+# 
+        # self.text_io_review_name.update(position_name_str, select=False)
+
 
 
 if __name__ == "__main__":
@@ -326,7 +405,7 @@ if __name__ == "__main__":
 class Old:
     queue = queue.Queue()
     
-    def __init__(self):
+    def __init__(self) -> None:
         self.text_output_board_date_seen = None
         self.text_output_board_eval_stockfish = None
         self.text_output_board_eval_leela = None
