@@ -218,9 +218,9 @@ class Board(QDialog):
         for real_rank in range(8):
             for real_file in range(8):
                 real_square = Square(rank_id=real_rank, file_id=real_file)
-                board_y, board_x = self.square_to_xy(real_square)
+                board_x, board_y = self.square_to_xy(real_square)
 
-                piece_image = QPixmap(images[self.psg_board()[real_file][real_rank]])
+                piece_image = QPixmap(images[self.psg_board()[real_rank][real_file]])
                 self.board_buttons[board_x][board_y].setIcon(piece_image)
 
                 color = self.square_color(real_square)
