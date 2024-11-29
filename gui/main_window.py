@@ -43,7 +43,7 @@ sys_os = sys_plat.system()
 
 menu_def_neutral = [
         ["File", ["Open .pgn", "Import .pgn"]],
-        ['Boar&d', ['Flip', "Mirror", 'Color', ['Brown::board_color_k',
+        ['Boar&d', ['Color', ['Brown::board_color_k',
                                       'Blue::board_color_k',
                                       'Green::board_color_k',
                                       'Gray::board_color_k'],
@@ -126,8 +126,8 @@ class MainWindow(QMainWindow):
                 add_menu_action(menu, action_name, callback)
 
     def build_puzzles(self) -> None:
-        self.database.full_engine_evaluation(engine=self.combined_engines.stockfish(), depth_value=20)
-        self.database.full_engine_evaluation(engine=self.combined_engines.leela(), depth_value=10_000)
+        self.database.full_engine_evaluation(engine=self.combined_engines.stockfish(), depth_value=12)
+        self.database.full_engine_evaluation(engine=self.combined_engines.leela(), depth_value=3_000)
     
     def file_picker(self, prompt) -> Path:
         dialog = QFileDialog()

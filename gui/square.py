@@ -24,17 +24,17 @@ class Square(QPushButton):
 
     square_clicked = Signal(int, int)
 
-    def __init__(self, row: int, column: int, parent=None) -> None:
+    def __init__(self, x: int, y: int, parent=None) -> None:
         super(Square, self).__init__(parent)
-        self.row = row
-        self.column = column
+        self.x = x
+        self.y = y
         self.setMinimumSize(25, 25)
 
         self._color = (0, 0, 0)
         self._highlight = (0, 0, 0, 0)
 
         self.clicked.connect(self.button_clicked)
-        self.clicked.connect(lambda: self.square_clicked.emit(self.row, self.column))
+        self.clicked.connect(lambda: self.square_clicked.emit(self.x, self.y))
 
     def set_color(self, color: Tuple[int, int, int]) -> None:
         """Sets the colour of the square."""
@@ -87,5 +87,4 @@ class Square(QPushButton):
 
     def button_clicked(self) -> None:
         """Handles the button click event."""
-        print(f"Square {self.row},{self.column} clicked.")
-        # self.parent().button_clicked(self.row, self.column)
+        print(f"Square {self.x},{self.y} clicked.")
