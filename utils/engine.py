@@ -1,4 +1,5 @@
 import chess.engine
+import asyncio
 from typing import List
 
 
@@ -227,6 +228,53 @@ def certain_black_win() -> EngineEvaluationResult:
     return EngineEvaluationResult(certain_evaluation=0)
 def certain_draw() -> EngineEvaluationResult:
     return EngineEvaluationResult(certain_evaluation=0.5)
+
+
+class AsyncEngine:
+
+    def __init__(self, 
+                 engine_transport: asyncio.SubprocessTransport, 
+                 engine_protocol: chess.engine.UciProtocol,
+                 name: str,
+                 depth_parameter: str) -> None:
+        """Async version of Engine"""
+        self.engine_transport: asyncio.SubprocessTransport = engine_transport
+        self.engine_protocol: chess.engine.UciProtocol = engine_protocol
+        self.name = name
+        self.depth_parameter = depth_parameter
+
+    def standard_limit_constructor(self, depth_value):
+        if self.depth_parameter == "depth":
+            return chess.engine.Limit(depth=depth_value)
+        elif self.depth_parameter == "nodes":
+            return chess.engine.Limit(nodes=depth_value)
+        else:
+            raise NotImplementedError()
+
+    async def evaluate_board(self, board: chess.Board, depth_value: int = 30) -> EngineEvaluationResult:
+        """Slightly easier to work with version of chess.engine.SimpleEngine.evaluate"""
+        # Check the game isn't over already cos engines bug out if so
+        if board.outcome() is not None:
+            if board.outcome().winner is None:
+                return certain_draw()
+            elif board.outcome().winner == 0:
+                return certain_black_win()
+            elif board.outcome().winner == 1:
+                return certain_white_win()
+            else:
+                raise ValueError()
+        
+        if not board.is_valid():
+            return None
+        
+        limit: chess.engine.Limit = self.standard_limit_constructor(depth_value=depth_value)
+
+        with await self.engine_protocol.analysis(board, limit=limit) as analysis:
+            async for info in analysis:
+                print(info.get("score"), info.get("pv"))
+
+        return EngineEvaluationResult(info_dicts=analysis.info)            
+
 
 class Engine:
 
