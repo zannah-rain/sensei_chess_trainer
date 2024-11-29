@@ -55,36 +55,54 @@ class Board(QDialog):
         self.flip_button.clicked.connect(self.flip)
         self.extra_buttons_bar.addWidget(self.flip_button, 0, 0)
 
+        # Add a button to mirror the board
+        self.mirror_button = QPushButton("Mirror")
+        self.mirror_button.clicked.connect(self.mirror)
+        self.extra_buttons_bar.addWidget(self.mirror_button, 0, 1)
+
         self.current_selected_square: Square = None
     
-    def create_board_buttons(self) -> None:
-        """Creates the board buttons."""
+    def create_board_buttons(self) -> List[List[QGraphicsRectItem]]:
+        """
+        Creates the board buttons.
+        
+        In the resulting list of lists:
+        - The first index is the file (x) (0-7)
+        - The second index is the rank (y) (0-7)
+
+        If the board is not mirrored or flipped:
+        0, 0 is a1
+        7, 7 is h8
+        0, 1 is a2
+
+        Within the board_layout, y is 7 - rank because the grid layout displays top to bottom.
+        """
         board = list()
-        for i in range(8):
-            row = list()
-            board.append(row)
-            for j in range(8):
-                elem = self.create_square_button(row=i, column=j)
+        for x in range(8):
+            x_buttons = list()
+            board.append(x_buttons)
+            for y in range(8):
+                elem = self.create_square_button(x=x, y=y)
                 elem.square_clicked.connect(self.button_clicked)
                 
-                row.append(elem)
-                self.board_layout.addWidget(elem, i, j)
+                x_buttons.append(elem)
+                self.board_layout.addWidget(elem, 7 - y, x) # 7 - y because grid layout displays top to bottom
         return board
     
     @Slot()
-    def button_clicked(self, row: int, column: int) -> None:
+    def button_clicked(self, x: int, y: int) -> None:
         """Handles the button click event."""
 
-        square = self.rect_to_square(row, column)
+        square = self.xy_to_square(x, y)
         print(f"Translates to square {square}.")
 
         if self.current_selected_square is None:
             self.current_selected_square = square
-            self.board_buttons[row][column].select()
+            self.board_buttons[x][y].select()
         else:
             move = self.current_selected_square.move_to(square)
 
-            old_board_x, old_board_y = self.square_to_rect(self.current_selected_square)
+            old_board_x, old_board_y = self.square_to_xy(self.current_selected_square)
             self.board_buttons[old_board_x][old_board_y].deselect()
 
             self.current_selected_square = None
@@ -94,7 +112,7 @@ class Board(QDialog):
     
     def square_color(self, square: Square) -> Tuple[int, int, int]:
         """Returns the colour of the square."""
-        if (square.rank_id + square.file_id + self.mirrored) % 2 == 0:
+        if (square.rank_id + square.file_id) % 2 == 0:
             return dark_gray
         else:
             return light_gray
@@ -118,9 +136,9 @@ class Board(QDialog):
         """Updates the labels."""
         self.player_label.setText("{0} to play".format("White" if self.perspective == chess.WHITE else "Black"))
 
-    def create_square_button(self, row: int, column: int) -> QGraphicsRectItem:
+    def create_square_button(self, x: int, y: int) -> QGraphicsRectItem:
         """ Returns a QGraphicRectItem representing a square on the board. """
-        button = gui.square.Square(row=row, column=column, parent=self)
+        button = gui.square.Square(x=x, y=y, parent=self)
         return button
     
     def highlight_squares(self, square_colour_tuple: Tuple[Tuple[Square, tuple]], highlight_strength: float = 0.5) -> None:
@@ -148,6 +166,10 @@ class Board(QDialog):
         self.perspective = not self.perspective
         self.update_board_pieces_and_colours()
 
+    def mirror(self) -> None:
+        """Mirrors the board."""
+        self.mirrored = not self.mirrored
+
     def randomise_perspective_and_mirroring(self) -> None:
         self.perspective = random.choice([chess.WHITE, chess.BLACK])
         self.mirrored = random.choice([True, False])
@@ -163,46 +185,56 @@ class Board(QDialog):
             self._mirrored = value
             self.update_board_pieces_and_colours()
 
-    def translate_coordinates(self, x: int, y: int) -> Tuple[int, int]:
+    def translate_coordinates(self, rank: int, file: int) -> Tuple[int, int]:
         """
         Translates the coordinates based on the perspective and mirroring.
         
-        Can't be handled by the Square class as it doesn't know about the board's perspective or mirroring."""
-        x = 7-x
-        y = y
-        if self.mirrored:
-            x = 7 - x
-        if self.perspective == chess.BLACK:
-            x = 7 - x
-            y = 7 - y
-        return x, y
+        Can't be handled by the Square class as it doesn't know about the board's perspective or mirroring.
 
-    def rect_to_square(self, row: int, column: int) -> Square:
-        """Converts a row and column to a square."""
-        rank_id, file_id = self.translate_coordinates(row, column)
+        Is always its own inverse.
+        """
+        rank = rank
+        file = file
+        if self.mirrored:
+            file = 7 - file
+        if self.perspective == chess.BLACK:
+            rank = 7 - rank
+            file = 7 - file
+        return rank, file
+
+    def xy_to_square(self, x: int, y: int) -> Square:
+        """Converts a set of x & y coordinates (which don't account for flipping / mirroring) to a real square (eg e4)."""
+        rank_id, file_id = self.translate_coordinates(rank=y, file=x)
         return Square(rank_id=rank_id, file_id=file_id)
     
-    def square_to_rect(self, square: Square) -> Tuple[int, int]:
-        """Converts a square to a row and column."""
+    def square_to_xy(self, square: Square) -> Tuple[int, int]:
+        """Converts a square to a button x & y coordinates, accounting for current flipping & mirroring."""
         x, y = self.translate_coordinates(square.rank_id, square.file_id)
         return x, y
 
     def update_board_pieces_and_colours(self) -> None:
         """Updates the board pieces."""
 
-        for i in range(8):
-            for j in range(8):
-                real_square = Square(rank_id=i, file_id=j)
-                board_x, board_y = self.square_to_rect(real_square)
+        for real_rank in range(8):
+            for real_file in range(8):
+                real_square = Square(rank_id=real_rank, file_id=real_file)
+                board_y, board_x = self.square_to_xy(real_square)
 
-                piece_image = QPixmap(images[self.psg_board()[i][j]])
+                piece_image = QPixmap(images[self.psg_board()[real_rank][real_file]])
                 self.board_buttons[board_x][board_y].setIcon(piece_image)
 
                 color = self.square_color(real_square)
                 self.board_buttons[board_x][board_y].color = color
     
-    def psg_board(self) -> List[int]:
-        """ Extract piece positions as a list of ints corresponding to the piece images. """
+    def psg_board(self) -> List[List[int]]:
+        """ 
+        Extract piece positions as a list of lists of ints corresponding to the piece images. 
+        
+        0, 0 is a1
+        7, 7 is h8
+
+        The first index is the rank, the second is the file!
+        """
         psgboard = []
 
         old_r = None
@@ -226,7 +258,7 @@ class Board(QDialog):
 
             if pc is not None:
                 pt = pc.piece_type
-                c = (pc.color + self.mirrored) % 2
+                c = pc.color % 2
                 if c:
                     if pt == chess.PAWN:
                         piece_r.append(PAWNW)
