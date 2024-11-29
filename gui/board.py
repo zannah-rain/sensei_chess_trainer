@@ -18,7 +18,7 @@ class Board(QDialog):
     """
     Class representing the GUI board.
     
-    Doesn't handle any changes to its own state (e.g. perspective, mirrored, etc.), only displays the board.
+    Doesn't handle any changes to its own state (e.g. perspective, mirrored, etc.), only displays the board and emits events.
     """
 
     move_signal = Signal(chess.Move)
@@ -86,7 +86,7 @@ class Board(QDialog):
     
     def square_color(self, square: Square) -> Tuple[int, int, int]:
         """Returns the colour of the square."""
-        if (square.rank_id + square.file_id + self.mirrored) % 2:
+        if (square.rank_id + square.file_id + self.mirrored) % 2 == 0:
             return dark_gray
         else:
             return light_gray
