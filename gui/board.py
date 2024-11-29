@@ -209,7 +209,7 @@ class Board(QDialog):
     
     def square_to_xy(self, square: Square) -> Tuple[int, int]:
         """Converts a square to a button x & y coordinates, accounting for current flipping & mirroring."""
-        x, y = self.translate_coordinates(square.rank_id, square.file_id)
+        y, x = self.translate_coordinates(square.rank_id, square.file_id)
         return x, y
 
     def update_board_pieces_and_colours(self) -> None:
@@ -220,7 +220,7 @@ class Board(QDialog):
                 real_square = Square(rank_id=real_rank, file_id=real_file)
                 board_y, board_x = self.square_to_xy(real_square)
 
-                piece_image = QPixmap(images[self.psg_board()[real_rank][real_file]])
+                piece_image = QPixmap(images[self.psg_board()[real_file][real_rank]])
                 self.board_buttons[board_x][board_y].setIcon(piece_image)
 
                 color = self.square_color(real_square)
