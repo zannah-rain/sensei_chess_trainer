@@ -47,6 +47,14 @@ class Board(QDialog):
         self.board_buttons = self.create_board_buttons()
         self.update_board_pieces_and_colours()
 
+        self.extra_buttons_bar = QGridLayout()
+        self.sub_layout.addLayout(self.extra_buttons_bar)
+
+        # Add a button to flip the board
+        self.flip_button = QPushButton("Flip")
+        self.flip_button.clicked.connect(self.flip)
+        self.extra_buttons_bar.addWidget(self.flip_button, 0, 0)
+
         self.current_selected_square: Square = None
     
     def create_board_buttons(self) -> None:
@@ -138,6 +146,7 @@ class Board(QDialog):
     def flip(self) -> None:
         """Flips the perspective (NOT THE COLOURS!)"""
         self.perspective = not self.perspective
+        self.update_board_pieces_and_colours()
 
     def randomise_perspective_and_mirroring(self) -> None:
         self.perspective = random.choice([chess.WHITE, chess.BLACK])
