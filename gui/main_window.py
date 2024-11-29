@@ -107,7 +107,7 @@ class MainWindow(QMainWindow):
         self.init_menu()
 
         self.database = Database()
-        self.combined_engines = utils.combined_engines.CombinedEngines(settings=self.settings, database=self.database)
+        # self.combined_engines = utils.combined_engines.CombinedEngines(settings=self.settings, database=self.database)
 
         self._game = chess.pgn.Game()
         self._game_node = self.game
