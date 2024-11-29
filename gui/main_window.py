@@ -27,6 +27,7 @@ import utils.colours
 from utils.square import Square
 from utils.move import Move
 from PySide6.QtWidgets import QMainWindow, QVBoxLayout, QFileDialog, QVBoxLayout, QHBoxLayout, QWidget
+import PySide6.QtWidgets as QtWidgets
 from PySide6.QtGui import QAction
 from gui.board import Board
 from PySide6.QtMultimedia import QSoundEffect, QMediaPlayer, QAudioOutput
@@ -43,12 +44,6 @@ sys_os = sys_plat.system()
 
 menu_def_neutral = [
         ["File", ["Open .pgn", "Import .pgn"]],
-        ['Boar&d', ['Color', ['Brown::board_color_k',
-                                      'Blue::board_color_k',
-                                      'Green::board_color_k',
-                                      'Gray::board_color_k'],
-                   ]
-        ],
         ["Data", ["Time Controls", "Games", "Prioritised Games", "Showcase Games", "Stats", "Puzzles"]],
         ['&Time', ['User::tc_k', 'Engine::tc_k']],
         ['&Settings', ['Game::settings_game_k']],
@@ -78,8 +73,10 @@ class MainWindow(QMainWindow):
         horizontal_layout = QHBoxLayout()
         vertical_layout_1 = QVBoxLayout()
         vertical_layout_2 = QVBoxLayout()
+        vertical_layout_3 = QVBoxLayout()
         horizontal_layout.addLayout(vertical_layout_1)
         horizontal_layout.addLayout(vertical_layout_2)
+        horizontal_layout.addLayout(vertical_layout_3)
 
         self.gui_board = Board()
         vertical_layout_1.addWidget(self.gui_board)
@@ -104,6 +101,35 @@ class MainWindow(QMainWindow):
         layout_widget = QWidget()
         layout_widget.setLayout(horizontal_layout)
         self.setCentralWidget(layout_widget)
+
+        tab_widget = QtWidgets.QTabWidget()
+        vertical_layout_3.addWidget(tab_widget)
+
+        self.puzzle_widget = QtWidgets.QWidget()
+        tab_widget.addTab(self.puzzle_widget, "Puzzles")
+        self.init_puzzle_widget()
+
+        self.game_review_widget = QtWidgets.QWidget()
+        tab_widget.addTab(self.game_review_widget, "Game Review")
+
+        self.settings_widget = QtWidgets.QWidget()
+        tab_widget.addTab(self.settings_widget, "Settings")
+
+    def init_puzzle_widget(self) -> None:
+        """Initialise the puzzle widget."""
+        layout = QVBoxLayout(self.puzzle_widget)
+        
+        next_puzzle_button = QtWidgets.QPushButton("Next Puzzle")
+        next_puzzle_button.clicked.connect(self.next_puzzle)
+
+        layout.addWidget(next_puzzle_button)
+
+    def next_puzzle(self) -> None:
+        self.current_puzzle = self.database.highest_priority_puzzle()
+        # Randomise perspective to hopefully help learning
+        self.gui_board.randomise_perspective_and_mirroring()
+        self.game = chess.pgn.Game().from_board(chess.Board(fen=position_to_fen(self.current_puzzle.position)))
+        self.game_review_mode = False
     
     def init_menu(self) -> None:
         self.menu = self.menuBar()
@@ -127,7 +153,7 @@ class MainWindow(QMainWindow):
 
     def build_puzzles(self) -> None:
         self.database.full_engine_evaluation(engine=self.combined_engines.stockfish(), depth_value=12)
-        self.database.full_engine_evaluation(engine=self.combined_engines.leela(), depth_value=3_000)
+        self.database.full_engine_evaluation(engine=self.combined_engines.leela(), depth_value=100)
     
     def file_picker(self, prompt) -> Path:
         dialog = QFileDialog()
@@ -330,6 +356,8 @@ class MainWindow(QMainWindow):
         self.game_node_change_signal.emit(value)
 
         self._current_game_review_position_start_time = datetime.datetime.now()
+
+        self.gui_board.board = self.board
 
         # stockfish_eval = self.combined_engines.stockfish_evaluation(depth=25, board=self.board)
         # leela_eval = self.combined_engines.leela_evaluation(nodes=100_000, board=self.board)
@@ -965,13 +993,6 @@ class Old:
             with open(self.file_picker(prompt=".pgn file:")[1]["Browse"], "r") as f:
                 self.game = chess.pgn.read_game(f)
                 self.game_review_mode = True
-
-        if button == "Next Puzzle":
-            self.current_puzzle = self.database.highest_priority_puzzle()
-            # Randomise perspective to hopefully help learning
-            self.randomise_perspective_and_mirroring()
-            self.game = chess.pgn.Game().from_board(chess.Board(fen=position_to_fen(self.current_puzzle.position)))
-            self.game_review_mode = False
 
         if button == "Download all lichess .pgn's":
             self.database.download_latest_games()
