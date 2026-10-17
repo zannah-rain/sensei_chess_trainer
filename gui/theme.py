@@ -51,6 +51,12 @@ QLabel#badgesLabel {{
     padding: 4px 0px;
 }}
 
+QLabel#ticketRow {{
+    font-size: 19px;
+    letter-spacing: 2px;
+    padding: 2px 0px;
+}}
+
 QPushButton#actionButton {{
     background-color: {ACCENT};
     color: #0c120f;

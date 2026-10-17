@@ -35,6 +35,7 @@ from gui.workers import DownloadGamesWorker, BuildPuzzlesWorker
 from gui.eval_worker import EvaluationWorker
 from gui.position_info_widget import PositionInfoWidget
 from gui.theme import MAIN_STYLESHEET
+from gui.gauge_widget import SpeedDialGauge
 
 
 logging.basicConfig(level=logging.INFO)
@@ -161,6 +162,13 @@ class MainWindow(QMainWindow):
         self._current_puzzle_start_time: datetime.datetime = None
         self.puzzle_attempt = 0
         self.puzzle_combo = 0  # consecutive first-attempt puzzle successes this session
+        self._session_puzzle_results: list = []  # True/False per resolved puzzle this session, for the ticket row
+        # Both the Today tab and the Puzzles tab show the puzzle-performance
+        # widgets below - each is a separate widget instance (a QWidget can
+        # only live in one layout), kept in sync via these lists.
+        self._ticket_row_labels: list = []
+        self._original_eval_gauges: list = []
+        self._new_eval_gauges: list = []
         self.review_attempt = 0
         self.game_review_mode = False
         self._current_game_review_position_start_time: datetime.datetime = None
@@ -276,12 +284,45 @@ class MainWindow(QMainWindow):
         # directly relevant here too - kept live by refresh_stats_tab().
         self.puzzle_today_progress_bar = QtWidgets.QProgressBar()
         self.puzzle_today_progress_bar.setRange(0, 100)
-        self.puzzle_today_stats_label = QtWidgets.QLabel()
-        self.puzzle_today_stats_label.setObjectName("statsCard")
 
         layout.addWidget(self.next_puzzle_button)
         layout.addWidget(self.puzzle_today_progress_bar)
+        self._build_puzzle_performance_widgets(layout)
+        self.puzzle_today_stats_label = QtWidgets.QLabel()
+        self.puzzle_today_stats_label.setObjectName("statsCard")
         layout.addWidget(self.puzzle_today_stats_label)
+
+    def _build_puzzle_performance_widgets(self, layout: QVBoxLayout) -> None:
+        """
+        Builds a ticket row (one colour-coded icon per puzzle resolved this
+        session - a replacement for the plain "Puzzles done: N" text) and a
+        pair of speed-dial gauges for today's average original/new eval loss
+        (replacing the plain "Average ... eval loss: n" text), and registers
+        them so _record_puzzle_result()/_apply_stats() can keep every copy in
+        sync - both the Today tab and the Puzzles tab show these.
+        """
+        ticket_row = QtWidgets.QLabel()
+        ticket_row.setObjectName("ticketRow")
+        ticket_row.setWordWrap(True)
+        self._ticket_row_labels.append(ticket_row)
+        layout.addWidget(ticket_row)
+
+        gauges_layout = QHBoxLayout()
+        original_gauge = SpeedDialGauge("Original Eval Loss")
+        new_gauge = SpeedDialGauge("New Eval Loss")
+        gauges_layout.addWidget(original_gauge)
+        gauges_layout.addWidget(new_gauge)
+        self._original_eval_gauges.append(original_gauge)
+        self._new_eval_gauges.append(new_gauge)
+        layout.addLayout(gauges_layout)
+
+    def _record_puzzle_result(self, success: bool) -> None:
+        """Appends to this session's puzzle ticket row - ✅ for a solved
+        puzzle, ❌ for a failed one - and refreshes every copy of it."""
+        self._session_puzzle_results.append(success)
+        icons = "".join("✅" if ok else "❌" for ok in self._session_puzzle_results)
+        for label in self._ticket_row_labels:
+            label.setText(icons)
 
     def init_next_puzzle_status_bar(self) -> None:
         """A persistent "Selecting puzzle..." indicator, visible while
@@ -334,14 +375,15 @@ class MainWindow(QMainWindow):
         self.today_games_label.setObjectName("statsCard")
         self.today_progress_bar = QtWidgets.QProgressBar()
         self.today_progress_bar.setRange(0, 100)
-        self.today_puzzles_label = QtWidgets.QLabel()
-        self.today_puzzles_label.setObjectName("statsCard")
         refresh_button = QtWidgets.QPushButton("Refresh")
         refresh_button.setObjectName("actionButton")
         refresh_button.clicked.connect(self.refresh_stats_tab)
 
         layout.addWidget(self.today_games_label)
         layout.addWidget(self.today_progress_bar)
+        self._build_puzzle_performance_widgets(layout)
+        self.today_puzzles_label = QtWidgets.QLabel()
+        self.today_puzzles_label.setObjectName("statsCard")
         layout.addWidget(self.today_puzzles_label)
         layout.addWidget(refresh_button)
 
@@ -428,10 +470,13 @@ class MainWindow(QMainWindow):
         self.today_games_label.setText(dedent(text=f"""\
             Games played: {stats["total_games_played_today"]}
             New puzzles: {stats["total_half_moves_from_real_games_today"] // 2}"""))
+
+        for gauge in self._original_eval_gauges:
+            gauge.animate_to(ifnone(stats["average_real_eval_loss_today"], 0))
+        for gauge in self._new_eval_gauges:
+            gauge.animate_to(ifnone(stats["average_practice_eval_loss_today"], 0))
+
         today_puzzles_text = dedent(text=f"""\
-            Puzzles done: {stats["positions_practiced_today"]}
-            Average original eval loss: {ifnone(stats["average_real_eval_loss_today"], 0):.3f}
-            Average new eval loss: {ifnone(stats["average_practice_eval_loss_today"], 0):.3f}
             Improvement: {(1 - ifnone(stats["average_practice_eval_loss_today"], 0) / max(ifnone(stats["average_real_eval_loss_today"], 0), .0001)) * 100:.1f}%
             Total Improvement vs Target: {total_eval_improvement_today:2f} vs {daily_eval_improvement_target:2f}
             """)
@@ -1017,6 +1062,7 @@ class MainWindow(QMainWindow):
                 extra_button_text="Retry")
             self.gui_board.flash_result(((move, red),))
             self._set_puzzle_combo(0)
+            self._record_puzzle_result(False)
             self.refresh_stats_tab()
             if retry_clicked:
                 self._retry_puzzle(puzzle)
@@ -1028,6 +1074,7 @@ class MainWindow(QMainWindow):
                 highlights.append((puzzle.latest_attempt_move_object, red))
             self.gui_board.flash_result(tuple(highlights))
             self._set_puzzle_combo(self.puzzle_combo + 1)
+            self._record_puzzle_result(True)
             self.refresh_stats_tab()
 
         if engine_agreed:
