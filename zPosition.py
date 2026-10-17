@@ -1037,10 +1037,11 @@ class zPosition:
         return game
 
 if __name__ == "__main__":
+    import os
     import psutil
     engines = {
-        "stockfish": chess.engine.SimpleEngine.popen_uci(r"REDACTED_PATH/stockfish/stockfish-windows-x86-64-avx2.exe"),
-        "leela": chess.engine.SimpleEngine.popen_uci(r"REDACTED_PATH/Leela/lc0.exe")
+        "stockfish": chess.engine.SimpleEngine.popen_uci(os.environ.get("STOCKFISH_PATH", "stockfish")),
+        "leela": chess.engine.SimpleEngine.popen_uci(os.environ.get("LEELA_PATH", "lc0"))
     }
     threads: int = int(psutil.cpu_count(logical=True) - 3)  # almost all logical CPU cores
     hash: int = int(psutil.virtual_memory().available / 1024 / 1024 * 0.3)  # 75% of available RAM
