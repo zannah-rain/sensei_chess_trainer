@@ -38,9 +38,28 @@ class DownloadGamesWorker(QThread):
 
 class BuildPuzzlesWorker(QThread):
     """
-    Runs full Stockfish + Leela evaluation coverage on a background thread, so
+    Runs a two-stage Stockfish + Leela evaluation pass on a background thread, so
     the GUI stays responsive and the operation can be stopped or left running
     while the rest of the app is used.
+
+    Stage 1 ("quick scan") evaluates every known position at a cheap, shallow
+    depth/node count, broadly enough for move_attempt_analysis's eval-loss figures
+    to exist. Stage 2 ("refine") re-evaluates every position again at a much
+    higher, expensive depth/node count, but in priority order - positions with
+    the biggest estimated eval loss (the most promising puzzle candidates, see
+    Database.puzzle_candidates_by_priority) go first - so stopping (or being
+    interrupted) partway through stage 2 still means the positions most likely to
+    actually matter got the expensive treatment, even though the whole list, run
+    to completion, covers everything. (Stage 2 only refines each candidate's own
+    starting position, not its resulting/practice positions - the starting
+    position's evaluation is what's shown as a puzzle's own "best move"
+    reference value during solving.)
+
+    Both stages alternate between Stockfish and Leela per position (see
+    Database.full_multi_engine_evaluation) rather than running one engine through
+    the whole list before the other starts - otherwise, especially in stage 2's
+    priority order, the least important position would get evaluated by one
+    engine long before the other engine even looked at the most important one.
 
     Opens its own Database connection (see DownloadGamesWorker) and its own
     Stockfish/Leela engine subprocesses, rather than reusing MainWindow's: a
@@ -49,17 +68,21 @@ class BuildPuzzlesWorker(QThread):
     engine calls (making a move, navigating positions) while this runs.
     """
 
-    progress = Signal(str, int, int)  # phase ("Stockfish"/"Leela"), positions done, positions total
+    progress = Signal(str, int, int)  # phase, units done, units total
     failed = Signal(str)
 
     def __init__(self, database_file: str, stockfish_path: str, leela_path: str,
-                stockfish_depth: int = 12, leela_depth: int = 100, parent=None) -> None:
+                stockfish_quick_depth: int, leela_quick_nodes: int,
+                stockfish_refine_depth: int, leela_refine_nodes: int,
+                parent=None) -> None:
         super().__init__(parent)
         self.database_file = database_file
         self.stockfish_path = stockfish_path
         self.leela_path = leela_path
-        self.stockfish_depth = stockfish_depth
-        self.leela_depth = leela_depth
+        self.stockfish_quick_depth = stockfish_quick_depth
+        self.leela_quick_nodes = leela_quick_nodes
+        self.stockfish_refine_depth = stockfish_refine_depth
+        self.leela_refine_nodes = leela_refine_nodes
         self.stopped = False
         self._stop_requested = False
 
@@ -77,17 +100,28 @@ class BuildPuzzlesWorker(QThread):
         leela = Engine(engine=chess.engine.SimpleEngine.popen_uci(self.leela_path),
                        name="leela", depth_parameter="nodes")
 
+        def report(phase):
+            return lambda engine_name, done, total: self.progress.emit(f"{phase} ({engine_name})", done, total)
+
         try:
-            worker_database.full_engine_evaluation(
-                engine=stockfish, depth_value=self.stockfish_depth,
-                progress_callback=lambda done, total: self.progress.emit("Stockfish", done, total),
+            # Stage 1: quick scan, broad coverage
+            worker_database.full_multi_engine_evaluation(
+                engine_depth_pairs=[(stockfish, self.stockfish_quick_depth), (leela, self.leela_quick_nodes)],
+                progress_callback=report("Quick scan"),
                 should_stop=lambda: self._stop_requested)
 
-            if not self._stop_requested:
-                worker_database.full_engine_evaluation(
-                    engine=leela, depth_value=self.leela_depth,
-                    progress_callback=lambda done, total: self.progress.emit("Leela", done, total),
-                    should_stop=lambda: self._stop_requested)
+            if self._stop_requested:
+                return
+
+            # Stage 2: refine every position at much higher depth/nodes, but in
+            # priority order (biggest estimated eval loss first)
+            candidates = worker_database.puzzle_candidates_by_priority()
+
+            worker_database.full_multi_engine_evaluation(
+                engine_depth_pairs=[(stockfish, self.stockfish_refine_depth), (leela, self.leela_refine_nodes)],
+                positions=candidates,
+                progress_callback=report("Refine"),
+                should_stop=lambda: self._stop_requested)
         except Exception as e:
             self.failed.emit(str(e))
         finally:

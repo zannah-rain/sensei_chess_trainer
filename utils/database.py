@@ -1056,6 +1056,29 @@ class Database:
         else:
             return None
     
+    def puzzle_candidates_by_priority(self, limit: int = None) -> List[str]:
+        """
+        Every position with a recorded move attempt, ordered with the biggest
+        estimated real-game mistakes (i.e. the most puzzle-worthy positions) first
+        - cheapest correct ranking available without a deep re-evaluation of
+        everything.
+
+        Intended to drive a high-depth refinement pass in priority order after a
+        cheap/shallow pass has populated evaluations broadly enough for
+        move_attempt_analysis's loss figures to exist at all: refining in this
+        order means stopping (or being interrupted) partway through still spends
+        the expensive engine time on the positions most likely to matter, even
+        though the full list, run to completion, covers everything. Positions with
+        no recorded loss yet (evaluations still missing) sort last in SQLite's
+        NULL ordering and so are refined last, not excluded.
+        """
+        query = "SELECT position FROM move_attempt_analysis ORDER BY latest_real_eval_loss DESC"
+        params = ()
+        if limit is not None:
+            query += " LIMIT ?"
+            params = (limit,)
+        return [i[0] for i in self.con.execute(query, params).fetchall()]
+
     def highest_priority_puzzle(self) -> Puzzle:
         schedule = self.spaced_repetition_move_schedule()
         all_puzzles = [dict(i) for i in self.con.execute("SELECT * FROM move_attempt_analysis").fetchall()]
@@ -1177,18 +1200,31 @@ class Database:
     def full_engine_evaluation(self,
                                engine: Engine,
                                depth_value: int,
+                               positions=None,
                                progress_callback=None,
                                should_stop=None):
         """
-        Ensure full coverage in cached engine evaluations for the given engine at the
+        Ensure coverage in cached engine evaluations for the given engine at the
         wanted depth.
 
+        :param positions: if given, evaluate exactly these positions, in the order
+            given (e.g. a priority order from a cheaper earlier pass, so stopping
+            partway through still covers the most important ones first) instead of
+            every known position missing coverage at this depth, in arbitrary
+            order. Already in utils.position (fen minus move counters) format.
+            Positions already cached at/above depth_value are still skipped
+            (engine_evaluation() is a no-op for those), so passing the same
+            positions to two calls at different depths is safe and won't
+            double-evaluate anything.
         :param progress_callback: if given, called with (positions_done, positions_total)
             after each position is evaluated (e.g. to drive a progress bar).
         :param should_stop: if given, checked before each position; evaluation stops
             (committing whatever's been done so far) as soon as it returns True.
         """
-        positions_to_evaluate = self.all_positions() - set([i[0] for i in self.con.execute(f"SELECT position FROM {engine.evaluations_table} WHERE {engine.depth_parameter} >= {depth_value}").fetchall()])
+        if positions is not None:
+            positions_to_evaluate = list(dict.fromkeys(positions))  # de-duplicate, preserving order
+        else:
+            positions_to_evaluate = self.all_positions() - set([i[0] for i in self.con.execute(f"SELECT position FROM {engine.evaluations_table} WHERE {engine.depth_parameter} >= {depth_value}").fetchall()])
         total = len(positions_to_evaluate)
         for n, i in enumerate(positions_to_evaluate):
             if should_stop is not None and should_stop():
@@ -1205,7 +1241,67 @@ class Database:
                     self.con.commit()
 
         self.con.commit()
-    
+
+    def full_multi_engine_evaluation(self,
+                                     engine_depth_pairs,
+                                     positions=None,
+                                     progress_callback=None,
+                                     should_stop=None):
+        """
+        Like full_engine_evaluation, but runs several engines, alternating engine
+        by engine *within* each position instead of running one engine through
+        every position before the next engine starts. Otherwise, in priority-
+        ordered runs, the least important position would get evaluated by the
+        first engine long before the second engine even looked at the most
+        important one.
+
+        :param engine_depth_pairs: list of (Engine, depth_value) pairs. Every
+            engine evaluates every position before moving on to the next position.
+        :param positions: as in full_engine_evaluation - if given, evaluate
+            exactly these positions, in the order given. If not given, evaluates
+            the union of whatever's missing coverage for any of the given engines
+            (each engine_evaluation() call is still a no-op for an engine/depth a
+            position already has, so this doesn't do redundant work).
+        :param progress_callback: if given, called with (engine_name, units_done,
+            units_total) after each (position, engine) pair is evaluated - total
+            is positions * engines, so progress increases smoothly rather than
+            jumping back down when the next engine starts.
+        :param should_stop: if given, checked before each position (not before
+            each engine within it, so stopping never leaves a position evaluated
+            by one engine but not the other); evaluation stops (committing
+            whatever's been done so far) as soon as it returns True.
+        """
+        if positions is not None:
+            positions_to_evaluate = list(dict.fromkeys(positions))
+        else:
+            positions_to_evaluate = set()
+            for engine, depth_value in engine_depth_pairs:
+                already_covered = set(i[0] for i in self.con.execute(
+                    f"SELECT position FROM {engine.evaluations_table} WHERE {engine.depth_parameter} >= {depth_value}").fetchall())
+                positions_to_evaluate |= (self.all_positions() - already_covered)
+            positions_to_evaluate = list(positions_to_evaluate)
+
+        positions_total = len(positions_to_evaluate)
+        units_total = positions_total * len(engine_depth_pairs)
+        units_done = 0
+        for n, i in enumerate(positions_to_evaluate):
+            if should_stop is not None and should_stop():
+                break
+
+            fen = f"{i} 0 0"
+            board = chess.Board(fen=fen)
+            if board.is_valid():
+                for engine, depth_value in engine_depth_pairs:
+                    self.engine_evaluation(board=board, engine=engine, depth_value=depth_value, commit=False)
+                    units_done += 1
+                    if progress_callback is not None:
+                        progress_callback(engine.name, units_done, units_total)
+                print(f"multi-engine evaluation done! {n + 1} / {positions_total} positions")
+                if n % 100 == 0:
+                    self.con.commit()
+
+        self.con.commit()
+
     def read_combined_engine_evaluation(self,
                                         board: chess.Board) -> float:
         position = board_position(board)

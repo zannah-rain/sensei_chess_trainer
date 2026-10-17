@@ -81,14 +81,23 @@ class MainWindow(QMainWindow):
 
         self.settings = Settings(schema={"Stockfish Executable": "Path",
                                     "Leela Executable": "Path",
-                                    "Stockfish Puzzle Min Depth": "int",
-                                    "Leela Puzzle Min Nodes": "int"},
+                                    "Stockfish Puzzle Quick Scan Depth": "int",
+                                    "Leela Puzzle Quick Scan Nodes": "int",
+                                    "Stockfish Puzzle Refine Depth": "int",
+                                    "Leela Puzzle Refine Nodes": "int"},
                             save_file=Path("EasyChessGuiSettings.json"),
                             settings_screen_title="Sensei Settings:")
-        # Sensible out-of-the-box defaults for the two puzzle-eligibility thresholds,
-        # so Build Puzzles works without forcing a settings prompt on first use.
-        self.settings.set_default("Stockfish Puzzle Min Depth", 20)
-        self.settings.set_default("Leela Puzzle Min Nodes", 10_000)
+        # Sensible out-of-the-box defaults for Build Puzzles' two-stage evaluation
+        # pass (see BuildPuzzlesWorker), so it works without forcing a settings
+        # prompt on first use. Stage 1 ("quick scan") is cheap and runs over every
+        # known position; stage 2 ("refine") is expensive and re-evaluates every
+        # position too, but in priority order (biggest estimated real-game mistake
+        # first), so stopping it early still covers the positions most likely to
+        # matter as puzzles.
+        self.settings.set_default("Stockfish Puzzle Quick Scan Depth", 8)
+        self.settings.set_default("Leela Puzzle Quick Scan Nodes", 1_000)
+        self.settings.set_default("Stockfish Puzzle Refine Depth", 20)
+        self.settings.set_default("Leela Puzzle Refine Nodes", 10_000)
 
         horizontal_layout = QHBoxLayout()
         vertical_layout_1 = QVBoxLayout()
@@ -369,10 +378,12 @@ class MainWindow(QMainWindow):
 
     def build_puzzles(self) -> None:
         """
-        Runs full Stockfish + Leela evaluation coverage in the background (see
-        BuildPuzzlesWorker), showing progress both in a dedicated dialog and in a
-        persistent status-bar indicator. If a build is already running, clicking
-        this again just re-shows its dialog rather than starting a second one.
+        Runs a two-stage Stockfish + Leela evaluation pass in the background (see
+        BuildPuzzlesWorker: a cheap broad "quick scan" followed by an expensive
+        "refine" pass over everything again, biggest estimated real-game mistakes
+        first), showing progress both in a dedicated dialog and in a persistent
+        status-bar indicator. If a build is already running, clicking this again
+        just re-shows its dialog rather than starting a second one.
         """
         if self._build_puzzles_worker is not None and self._build_puzzles_worker.isRunning():
             self._build_puzzles_dialog.show()
@@ -383,8 +394,10 @@ class MainWindow(QMainWindow):
         worker = BuildPuzzlesWorker(database_file=self.database.file,
                                     stockfish_path=self.settings["Stockfish Executable"],
                                     leela_path=self.settings["Leela Executable"],
-                                    stockfish_depth=int(self.settings["Stockfish Puzzle Min Depth"]),
-                                    leela_depth=int(self.settings["Leela Puzzle Min Nodes"]),
+                                    stockfish_quick_depth=int(self.settings["Stockfish Puzzle Quick Scan Depth"]),
+                                    leela_quick_nodes=int(self.settings["Leela Puzzle Quick Scan Nodes"]),
+                                    stockfish_refine_depth=int(self.settings["Stockfish Puzzle Refine Depth"]),
+                                    leela_refine_nodes=int(self.settings["Leela Puzzle Refine Nodes"]),
                                     parent=self)
         worker.progress.connect(self.on_build_puzzles_progress)
         worker.failed.connect(self.on_build_puzzles_failed)
