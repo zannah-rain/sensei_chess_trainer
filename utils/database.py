@@ -14,6 +14,8 @@ from requests.exceptions import ChunkedEncodingError
 import requests
 import time
 import globals
+import numpy as np
+import pandas as pd
 
 # Tables:
 
@@ -40,6 +42,8 @@ class Database:
                                   PRAGMA cache_size = -128000;  -- 128mb RAM cache (default is 2 or something :o)""")
         self.initialise_database_schema()
 
+        self.cache_scheduled_puzzles = 999
+
     def close_and_optimise(self):
         self.con.executescript("""PRAGMA analysis_limit=400;
                                   PRAGMA optimize;""")
@@ -60,93 +64,118 @@ class Database:
             response = r.json()
 
         return response
-
-    def _populate_lichess_stats(self, fen: str, commit: bool = True):
-        def amateur_api(fen: str,
-                        speed: str,
-                        variant: str = "standard",
-                        rating_band: str = 2500,
-                        moves: int = 50,
-                        recentGames: int = 0,
-                        topGames: int = 0,
-                        play: str = "") -> str:
-            url = "https://explorer.lichess.ovh/lichess?"
-            url += f"variant={variant}&"
-            url += f"speeds={speed}&"
-            url += f"ratings={rating_band}&"
-            url += f"recentGames={recentGames}&"
-            url += f"topGames={topGames}&"
-            url += f"moves={moves}&"
-            url += f"play={play}&"
-            url += f"fen={fen}"
-            return url
+    
+    def lichess_stats(self, 
+                      fen: str, 
+                      variants: List[str] = ["standard"],
+                      speeds: List[str] = ["ultraBullet", "bullet", "blitz", "rapid", "classical", "correspondence"],
+                      rating_bands: List[int] = [0, 1000, 1200, 1400, 1600, 1800, 2000, 2200, 2500],
+                      master_stats: bool = False) -> dict:
+        """Get the latest stats for a given position from the local database if it already exists, else download from the lichess API."""
+        if master_stats:
+            table = "latest_lichess_master_stats"
+        else:
+            table = "latest_lichess_stats"
         
-        for this_speed in ["ultraBullet", "bullet", "blitz", "rapid", "classical", "correspondence"]:
-            for this_rating_band in [0, 1000, 1200, 1400, 1600, 1800, 2000, 2200, 2500]:
-                x = self._lichess_opening_api_query(query_url=amateur_api(fen=fen, speed=this_speed, variant="standard", rating_band=this_rating_band, moves=0))
-                opening_eco = None
-                opening_name = None
-                white_wins = 0
-                draws = 0
-                black_wins = 0
-                if x is not None:
-                    if x["opening"] is not None:
-                        opening_eco = x["opening"]["eco"]
-                        opening_name = x["opening"]["name"]
-                    white_wins = x["white"]
-                    draws = x["draws"]
-                    black_wins = x["black"]
-                self.con.execute("""INSERT INTO lichess_stats
-                                    (request_fen,
-                                     request_timestamp,
-                                     request_variant,
-                                     request_speed,
-                                     request_rating_band,
-                                     request_since,
-                                     request_until,
-                                     request_n_moves,
-                                     request_n_top_games,
-                                     request_n_recent_games,
-                                     request_history,
-                                     opening_eco,
-                                     opening_name,
-                                     white_wins,
-                                     draws,
-                                     black_wins
-                                     )
-                                    VALUES(
-                                     ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?
-                                    )""",
-                                    (fen,
-                                     datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                                     "standard",
-                                     this_speed,
-                                     this_rating_band,
-                                     "1952-01",
-                                     "3000-12",
-                                     0,
-                                     0,
-                                     0,
-                                     0,
-                                     opening_eco,
-                                     opening_name,
-                                     white_wins,
-                                     draws,
-                                     black_wins))
-                print(f"Added lichess amateur stats for fen {fen}, speed {this_speed}, rating band {this_rating_band}")
+        white_wins = 0
+        draws = 0
+        black_wins = 0
 
-        def master_api(fen: str,
-                       topGames: int = 0,
-                       play: str = "",
-                       moves: int = 50):
-            url = 'https://explorer.lichess.ovh/masters?'
-            url += f'topGames={topGames}&'
-            url += f'moves={moves}&'
-            url += f'play={play}&'
-            url += f'fen={fen}'
-            return url
-        
-        x = self._lichess_opening_api_query(query_url=master_api(fen=fen, moves=0))
+        for speed in speeds:
+            for variant in variants:
+                for rating_band in rating_bands:
+                    x = self.con.execute(f"SELECT * FROM {table} WHERE fen = ?", (fen,)).fetchone()
+                    #if x is None:
+                    #    if master_stats:
+                    #        self.download_latest_lichess_stats_master(fen=fen, speed=speed, variant=variant, rating_band=rating_band)
+                    #    else:
+                    #        self.download_latest_lichess_stats_amateur(fen=fen, speed=speed, variant=variant, rating_band=rating_band)
+                    #    x = self.con.execute(f"SELECT * FROM {table} WHERE fen = ?", (fen,)).fetchone()
+                    white_wins += x["white_wins"]
+                    draws += x["draws"]
+                    black_wins += x["black_wins"]
+        return {"white_wins": white_wins, "draws": draws, "black_wins": black_wins}
+    
+    def download_latest_lichess_stats_amateur(self, 
+                                              fen: str, 
+                                              speed: str, 
+                                              variant: str = "standard", 
+                                              rating_band: int = 2500, 
+                                              moves: int = 50,
+                                              commit: bool = True) -> None:
+        """Download the latest amateur stats for a given position from the Lichess API."""
+        url = "https://explorer.lichess.ovh/lichess?"
+        url += f"variant={variant}&"
+        url += f"speeds={speed}&"
+        url += f"ratings={rating_band}&"
+        url += f"recentGames=0&"
+        url += f"topGames=0&"
+        url += f"moves={moves}&"
+        url += f"play=&"
+        url += f"fen={fen}"
+
+        x = self._lichess_opening_api_query(query_url=url)
+        opening_eco = None
+        opening_name = None
+        white_wins = 0
+        draws = 0
+        black_wins = 0
+        if x is not None:
+            if x["opening"] is not None:
+                opening_eco = x["opening"]["eco"]
+                opening_name = x["opening"]["name"]
+            white_wins = x["white"]
+            draws = x["draws"]
+            black_wins = x["black"]
+        self.con.execute("""INSERT INTO lichess_stats
+                            (request_fen,
+                                request_timestamp,
+                                request_variant,
+                                request_speed,
+                                request_rating_band,
+                                request_since,
+                                request_until,
+                                request_n_moves,
+                                request_n_top_games,
+                                request_n_recent_games,
+                                request_history,
+                                opening_eco,
+                                opening_name,
+                                white_wins,
+                                draws,
+                                black_wins
+                                )
+                            VALUES(
+                                ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?
+                            )""",
+                            (fen,
+                                datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                                "standard",
+                                speed,
+                                rating_band,
+                                "1952-01",
+                                "3000-12",
+                                0,
+                                0,
+                                0,
+                                0,
+                                opening_eco,
+                                opening_name,
+                                white_wins,
+                                draws,
+                                black_wins))
+        if commit:
+            self.con.commit()
+        print(f"Added lichess amateur stats for fen {fen}, speed {speed}, rating band {rating_band}")
+
+    def download_latest_lichess_stats_master(self, fen: str, moves: int = 50, commit: bool = True):
+        url = 'https://explorer.lichess.ovh/masters?'
+        url += f'topGames=0&'
+        url += f'moves={moves}&'
+        url += f'play=&'
+        url += f'fen={fen}'
+
+        x = self._lichess_opening_api_query(query_url=url)
         opening_eco = None
         opening_name = None
         white_wins = 0
@@ -627,6 +656,32 @@ class Database:
             in_repertoire REAL NOT NULL,
             PRIMARY KEY (position, move, resulting_position)
         )""")
+
+    def spaced_repetition_move_schedule(self, target_eval_loss: float = None):
+        if target_eval_loss is None:
+            target_eval_loss = dict(self.con.execute("SELECT * FROM move_stats").fetchall()[0])["average_real_eval_loss_alltime"] / 2
+        
+        move_attempts = self.con.execute("""SELECT * 
+                                            FROM my_move_attempts ma
+                                            INNER JOIN move_attempt_analysis maa ON ma.position = maa.position""").fetchall()
+        move_attempts = [dict(i) for i in move_attempts]
+        move_attempts = sorted(move_attempts, key=lambda x: x["timestamp"])
+        schedule = dict()
+        for i in move_attempts:
+            if i["position"] not in schedule.keys():
+                schedule[i["position"]] = {
+                    "last_failure": i["timestamp"],
+                    "times_succeeded_since": 0,
+                    "times_seen": 1
+                }
+            else:
+                schedule[i["position"]]["times_seen"] += 1
+                if i["latest_real_eval_loss"] <= target_eval_loss:
+                    schedule[i["position"]]["times_succeeded_since"] += 1
+                else:
+                    schedule[i["position"]]["last_failure"] = i["timestamp"]
+                    schedule[i["position"]]["times_succeeded_since"] = 0
+        return schedule
     
     def initialise_move_attempts_tables(self):
         # One to many table tracking which moves have been played in each position
@@ -646,6 +701,11 @@ class Database:
         )""")
         self.con.execute("""CREATE INDEX IF NOT EXISTS imove_attempts_realorpractice on move_attempts(real_or_practice)""")
         self.con.execute("""CREATE INDEX IF NOT EXISTS imove_attempts_positionplayerreal on move_attempts(position, player, real_or_practice)""")
+
+        self.con.execute(f"""CREATE TEMP VIEW my_move_attempts AS
+            SELECT *
+            FROM move_attempts
+            WHERE player = '{username}'""")
 
         self.con.execute("""CREATE TEMP VIEW move_attempts_practice_summary AS
             SELECT 
@@ -691,6 +751,7 @@ class Database:
             resulting_position TEXT NOT NULL,
             timestamp TIMESTAMP NOT NULL,
             move TEXT NOT NULL,
+            time_control TEXT,
             time_taken_seconds REAL
         )""")
         self.con.execute(f"""CREATE TRIGGER IF NOT EXISTS latest_move_attempts_updater
@@ -704,6 +765,7 @@ class Database:
                                      resulting_position,
                                      timestamp,
                                      move,
+                                     time_control,
                                      time_taken_seconds
                                  FROM move_attempts
                                  WHERE position=NEW.position
@@ -777,7 +839,7 @@ class Database:
 
         self.con.execute(f"""CREATE TEMP VIEW move_attempt_analysis_stage_0 AS 
                              SELECT 
-                                 latest_real_move_attempts.position AS position,
+                                 latest_move_attempts.position AS position,
                                  latest_real_move_attempts.resulting_position AS latest_real_resulting_position,
                                  latest_real_move_attempts.move AS latest_real_played_move,
                                  latest_real_move_attempts.time_control AS latest_real_time_control,
@@ -796,18 +858,18 @@ class Database:
                                  IFNULL(positions.times_seen, 1) as times_seen_in_real_games,
                                  positions.latest_timestamp as last_seen_in_real_game,
                                  JULIANDAY("NOW") - JULIANDAY(positions.latest_timestamp) as days_since_last_seen,
-                                 IFNULL(last_practice.timestamp, positions.latest_timestamp) as last_practiced_timestamp,
-                                 JULIANDAY("NOW") - IFNULL(JULIANDAY(last_practice.timestamp), JULIANDAY(positions.latest_timestamp)) as days_since_last_practiced,
+                                 IFNULL(latest_move_attempts.timestamp, positions.latest_timestamp) as last_practiced_timestamp,
+                                 JULIANDAY("NOW") - IFNULL(JULIANDAY(latest_move_attempts.timestamp), JULIANDAY(positions.latest_timestamp)) as days_since_last_practiced,
                                  IFNULL(latest_real_move_attempts.time_taken_seconds, IFNULL(time_controls_summary.average_seconds_per_move, 30)) AS latest_real_time_taken_seconds,
-                                 IFNULL(last_practice.time_taken_seconds, IFNULL(time_controls_summary.average_seconds_per_move, 30)) AS latest_practice_time_taken_seconds,
+                                 IFNULL(latest_move_attempts.time_taken_seconds, IFNULL(time_controls_summary.average_seconds_per_move, 30)) AS latest_practice_time_taken_seconds,
                                  IFNULL(practice_summary.times_practiced, 0) AS times_practiced
-                             FROM latest_real_move_attempts
+                             FROM latest_move_attempts
                              INNER JOIN combined_engine_evaluation initial_evals ON latest_real_move_attempts.position = initial_evals.position
                              INNER JOIN combined_engine_evaluation resulting_evals ON latest_real_move_attempts.resulting_position = resulting_evals.position
-                             INNER JOIN combined_engine_evaluation practice_evals ON last_practice.resulting_position = practice_evals.position
+                             INNER JOIN combined_engine_evaluation practice_evals ON latest_move_attempts.resulting_position = practice_evals.position
                              INNER JOIN summarised_positions_seen_in_games positions ON latest_real_move_attempts.position = positions.position
                              INNER JOIN positions_metadata basic_position_data ON basic_position_data.position = latest_real_move_attempts.position
-                             INNER JOIN latest_move_attempts last_practice ON latest_real_move_attempts.position = last_practice.position
+                             INNER JOIN latest_real_move_attempts ON latest_real_move_attempts.position = latest_move_attempts.position
                              LEFT JOIN move_attempts_practice_summary practice_summary ON latest_real_move_attempts.position = practice_summary.position
                              LEFT JOIN time_controls_summary ON latest_real_move_attempts.time_control = time_controls_summary.time_control
                              """)
@@ -824,7 +886,7 @@ class Database:
                                 1 / (CAST(times_practiced AS FLOAT) + 1) AS times_practiced_multiplier,
                                 days_since_last_practiced + 1 AS days_since_practiced_multiplier,
                                 1 / power(days_since_last_seen + 1, 1.5) AS days_since_seen_multiplier,
-                                (latest_real_eval_loss + 0.02) * (latest_practice_eval_loss + 0.1) * (MIN(latest_real_time_taken_seconds, 90) + MIN(latest_practice_time_taken_seconds, 90) + 10) * (power(times_seen_in_real_games + 1, 0.5)) * (1 / power(CAST(times_practiced AS FLOAT) + 1, 0.5)) * (power(days_since_last_practiced + 1, 1) + 1) * (1 / power(days_since_last_seen + 1, 1)) AS priority
+                                (latest_real_eval_loss + 0.02) * (latest_practice_eval_loss + 0.02) * (MIN(latest_real_time_taken_seconds, 90) + MIN(latest_practice_time_taken_seconds, 90) + 10) * (1 / power(CAST(times_practiced AS FLOAT) + 1, 0.5)) * (power(days_since_last_practiced + 1, 1) + 1) * (1 / power(days_since_last_seen + 1, 2)) AS priority --  * (power(times_seen_in_real_games + 1, 0.5))
                              FROM move_attempt_analysis_stage_0
                              ORDER BY priority DESC""")
         
@@ -969,6 +1031,15 @@ class Database:
         )""")
 
         self.con.commit()
+    
+    def todays_practice_moves(self):
+        result = self.con.execute("""SELECT 
+                *
+                FROM move_attempt_analysis
+                WHERE days_since_last_practiced <= 1
+                AND last_practiced_timestamp != last_seen_in_real_game""").fetchall()
+        result = pd.DataFrame(result, columns=[i[1] for i in self.con.execute("PRAGMA table_info(move_attempt_analysis)").fetchall()])
+        return result
 
     def value_exists(self, table, column, value) -> bool:
         """Check if a single value exists within a column."""
@@ -985,7 +1056,35 @@ class Database:
             return None
     
     def highest_priority_puzzle(self) -> Puzzle:
-        return Puzzle(x=dict(self.con.execute("SELECT * FROM move_attempt_analysis LIMIT 1").fetchone()))
+        schedule = self.spaced_repetition_move_schedule()
+        all_puzzles = [dict(i) for i in self.con.execute("SELECT * FROM move_attempt_analysis").fetchall()]
+        scheduled_puzzles = list()
+
+        for i in all_puzzles:
+            if i["position"] not in schedule.keys():
+                i["schedule_priority"] = 0
+                continue
+            this_schedule = schedule[i["position"]]
+            if this_schedule["times_seen"] == 1:
+                i["schedule_priority"] = 0
+                continue
+            scheduled_time = datetime.datetime.strptime(this_schedule["last_failure"], "%Y-%m-%d %H:%M:%S") + datetime.timedelta(days=min(2 ** this_schedule["times_succeeded_since"], 100_000))
+            if scheduled_time < datetime.datetime.now():
+                i["schedule_priority"] = 1
+                scheduled_puzzles.append(i)
+        
+        if len(scheduled_puzzles) == 0:
+            scheduled_puzzles = all_puzzles
+        else:
+            self.cache_scheduled_puzzles = len(scheduled_puzzles)
+
+        # Modifying priority to give more importance to outcome deciding moves and less to 0.98-0.96 eval losses that don't matter neearly as much
+        for i in scheduled_puzzles:
+            i["priority"] = i["priority"] * np.abs((i["initial_eval"]**2/2 - i["initial_eval"]**3/3) - (i["latest_practice_eval"]**2/2 - i["latest_practice_eval"]**3/3))  # Integrated area under the p(1-p) curve!
+        
+        scheduled_puzzles = sorted(scheduled_puzzles, key=lambda x: x["priority"], reverse=True)
+
+        return Puzzle(x=scheduled_puzzles[0])
 
     def all_positions(self):
 

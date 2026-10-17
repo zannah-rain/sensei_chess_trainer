@@ -1039,8 +1039,8 @@ class zPosition:
 if __name__ == "__main__":
     import psutil
     engines = {
-        "stockfish": chess.engine.SimpleEngine.popen_uci(r"C:\\Users\\REDACTED_USER\\PycharmProjects\\chess_analysis\\engines\\stockfish_15.1_win_x64_avx2\\stockfish-windows-2022-x86-64-avx2.exe"),
-        "leela": chess.engine.SimpleEngine.popen_uci(r"C:\\Users\\REDACTED_USER\\PycharmProjects\\chess_analysis\\engines\\lc0-v0.29.0-windows-gpu-nvidia-cuda\\lc0.exe")
+        "stockfish": chess.engine.SimpleEngine.popen_uci(r"REDACTED_PATH/stockfish/stockfish-windows-x86-64-avx2.exe"),
+        "leela": chess.engine.SimpleEngine.popen_uci(r"REDACTED_PATH/Leela/lc0.exe")
     }
     threads: int = int(psutil.cpu_count(logical=True) - 3)  # almost all logical CPU cores
     hash: int = int(psutil.virtual_memory().available / 1024 / 1024 * 0.3)  # 75% of available RAM
@@ -1053,7 +1053,7 @@ if __name__ == "__main__":
     # Big time increase after 40
     # 35 seems doable for smaller repertoires
     MIN_DEPTH = 25
-    LEELA_NODES = 10_000
+    LEELA_NODES = 20_000
     MIN_LIKELIHOOD = 0.04
     MIN_PROBABILISTIC_EVALUATION_LIKELIHOOD = 0.01
     PROBABILISTIC_EFFECT_CAP = 0.01
