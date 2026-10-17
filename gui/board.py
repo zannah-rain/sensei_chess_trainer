@@ -12,7 +12,7 @@ from gui.popups import PromotionPickerDialog
 from PySide6.QtWidgets import QPushButton, QDialog, QGridLayout, QGraphicsRectItem, QVBoxLayout, QLabel, QFrame, QSizePolicy
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QPixmap
-from PySide6.QtCore import Signal, Slot
+from PySide6.QtCore import Signal, Slot, QTimer
 
 
 class SquareGridFrame(QFrame):
@@ -89,7 +89,32 @@ class Board(QDialog):
         self.extra_buttons_bar.addWidget(self.mirror_button, 0, 1)
 
         self.current_selected_square: Square = None
-    
+
+        self._pending_flash_timer = None
+        self._pending_move = None
+
+    def start_pending_highlight(self, move: chess.Move) -> None:
+        """Flashes the move's squares to show its evaluation is in progress."""
+        self._pending_move = move
+        if self._pending_flash_timer is None:
+            self._pending_flash_timer = QTimer(self)
+            self._pending_flash_timer.timeout.connect(self._toggle_pending_flash)
+        self._pending_flash_on = False
+        self._toggle_pending_flash()  # show immediately, don't wait for the first interval
+        self._pending_flash_timer.start(350)
+
+    def _toggle_pending_flash(self) -> None:
+        self._pending_flash_on = not self._pending_flash_on
+        strength = 0.65 if self._pending_flash_on else 0.2
+        self.highlight_moves(((self._pending_move, pending),), highlight_strength=strength)
+
+    def stop_pending_highlight(self) -> None:
+        """Stops the flash. Does not restore any other highlight - the caller is
+        expected to apply whatever highlight (success/fail/last-move) comes next."""
+        if self._pending_flash_timer is not None:
+            self._pending_flash_timer.stop()
+        self._pending_move = None
+
     def create_board_buttons(self) -> List[List[QGraphicsRectItem]]:
         """
         Creates the board buttons.

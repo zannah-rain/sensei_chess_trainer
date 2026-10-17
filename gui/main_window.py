@@ -21,7 +21,6 @@ import datetime
 import pandas as pd
 from textwrap import dedent
 from io import StringIO
-import utils.combined_engines
 import utils.colours
 from utils.square import Square
 from utils.move import Move
@@ -30,9 +29,10 @@ import PySide6.QtWidgets as QtWidgets
 from PySide6.QtGui import QAction
 from gui.board import Board
 from PySide6.QtMultimedia import QSoundEffect, QMediaPlayer, QAudioOutput
-from PySide6.QtCore import QUrl, Signal, QObject, Qt, QTimer
+from PySide6.QtCore import QUrl, Signal, QObject, Qt, QTimer, QThread
 from gui.popups import TextboxPopup, TablePopup, DownloadProgressDialog, BuildPuzzlesProgressDialog
 from gui.workers import DownloadGamesWorker, BuildPuzzlesWorker
+from gui.eval_worker import EvaluationWorker
 from gui.position_info_widget import PositionInfoWidget
 
 
@@ -75,6 +75,14 @@ class MainWindow(QMainWindow):
 
     game_node_change_signal = Signal(chess.pgn.GameNode)
 
+    # Requests to the background EvaluationWorker (see gui/eval_worker.py) - connecting
+    # a signal to a slot that lives on a different thread auto-queues the call there.
+    puzzle_move_requested = Signal(int, str, str)  # generation, pre_move_fen, move_uci
+    review_move_requested = Signal(int, str, str, str)  # request_id, pre_move_fen, move_uci, original_next_fen
+    engine_move_requested = Signal(int, str)  # generation, fen
+    position_info_requested = Signal(int, str)  # generation, fen
+    shutdown_requested = Signal()
+
     def __init__(self) -> None:
         super(MainWindow, self).__init__()
         self.setWindowTitle(f"{APP_NAME} {APP_VERSION}")
@@ -114,7 +122,28 @@ class MainWindow(QMainWindow):
         self.init_menu()
 
         self.database = Database()
-        self.combined_engines = utils.combined_engines.CombinedEngines(settings=self.settings, database=self.database)
+
+        # A persistent background thread for every engine call the GUI needs (puzzle/
+        # review scoring, "Engine Move", Position Info's live eval), so moves and
+        # navigation never block on Stockfish/Leela. See gui/eval_worker.py.
+        self._eval_generation = 0
+        self._review_request_id = 0
+        self._eval_thread = QThread(self)
+        self._eval_worker = EvaluationWorker(database_file=self.database.file,
+                                             stockfish_path=self.settings["Stockfish Executable"],
+                                             leela_path=self.settings["Leela Executable"])
+        self._eval_worker.moveToThread(self._eval_thread)
+        self.puzzle_move_requested.connect(self._eval_worker.evaluate_puzzle_move)
+        self.review_move_requested.connect(self._eval_worker.evaluate_review_move)
+        self.engine_move_requested.connect(self._eval_worker.compute_engine_move)
+        self.position_info_requested.connect(self._eval_worker.evaluate_position_info)
+        self.shutdown_requested.connect(self._eval_worker.shutdown)
+        self._eval_worker.puzzle_move_evaluated.connect(self._on_puzzle_move_evaluated)
+        self._eval_worker.review_move_evaluated.connect(self._on_review_move_evaluated)
+        self._eval_worker.engine_move_ready.connect(self._on_engine_move_ready)
+        self._eval_worker.position_info_evaluated.connect(self._on_position_info_evaluated)
+        self._eval_worker.failed.connect(self._on_eval_worker_failed)
+        self._eval_thread.start()
 
         self._current_puzzle: Puzzle = None
         self._current_puzzle_start_time: datetime.datetime = None
@@ -122,6 +151,17 @@ class MainWindow(QMainWindow):
         self.review_attempt = 0
         self.game_review_mode = False
         self._current_game_review_position_start_time: datetime.datetime = None
+
+        # Snapshots for whichever puzzle/review move evaluation is currently
+        # pending in the background (see _handle_puzzle_move/_handle_review_move
+        # and their _on_*_evaluated callbacks)
+        self._pending_puzzle_move: chess.Move = None
+        self._pending_puzzle_snapshot: Puzzle = None
+        self._pending_review_move: chess.Move = None
+        self._pending_review_node: chess.pgn.GameNode = None
+        self._pending_review_turn: bool = None
+        self._pending_review_is_mainline: bool = None
+        self._pending_review_original_next: chess.pgn.ChildNode = None
 
         self._build_puzzles_worker: BuildPuzzlesWorker = None
         self._build_puzzles_dialog: BuildPuzzlesProgressDialog = None
@@ -174,9 +214,9 @@ class MainWindow(QMainWindow):
         tab_widget.addTab(self.console_widget, "Console")
         self.init_console_widget()
 
-        engine_move_button = QtWidgets.QPushButton("Engine Move")
-        engine_move_button.clicked.connect(self.on_engine_move_clicked)
-        vertical_layout_3.addWidget(engine_move_button)
+        self.engine_move_button = QtWidgets.QPushButton("Engine Move")
+        self.engine_move_button.clicked.connect(self.on_engine_move_clicked)
+        vertical_layout_3.addWidget(self.engine_move_button)
 
         nav_layout = QHBoxLayout()
         back_button = QtWidgets.QPushButton("<-")
@@ -326,6 +366,14 @@ class MainWindow(QMainWindow):
             self.nav_backward()
         else:
             super().keyPressEvent(event)
+
+    def closeEvent(self, event) -> None:
+        """Cleanly shuts down the background evaluation thread (and its engine
+        subprocesses) before the app exits. Note: wait() blocks until whatever
+        the worker is doing finishes - acceptable only here, at app close."""
+        self.shutdown_requested.emit()
+        self._eval_thread.wait()
+        super().closeEvent(event)
 
     def init_menu(self) -> None:
         self.menu = self.menuBar()
@@ -800,41 +848,49 @@ class MainWindow(QMainWindow):
             is_real=False,
             time_taken_seconds=(datetime.datetime.now() - self.current_puzzle_start_time).total_seconds())
 
-        engine_move = self.database.engine_move(board=pre_move_board, engine=self.combined_engines.stockfish(),
-                                                 depth_value=23, multipv=1)
+        self.play_move(move)  # advances game_node, plays move sound, yellow-highlights the move - instantly,
+                               # no engine calls on this thread
 
-        self.play_move(move)  # advances game_node, plays move sound, yellow-highlights the move
+        generation = self._eval_generation  # captured AFTER play_move, so a stale result can be detected
+        self._pending_puzzle_move = move
+        self._pending_puzzle_snapshot = self.current_puzzle
+        self.gui_board.start_pending_highlight(move)
+        self.puzzle_move_requested.emit(generation, pre_move_board.fen(), move.uci())
 
-        new_eval = self.combined_engines.stable_evaluation(min_depth=20, min_nodes=10_000, max_depth=30,
-                                                            max_instability=0.009, board=self.board)
+    def _on_puzzle_move_evaluated(self, generation: int, engine_agreed: bool, new_eval: float) -> None:
+        if generation != self._eval_generation:
+            return  # the board has moved on since this request was made - discard
+        self.gui_board.stop_pending_highlight()
+        move = self._pending_puzzle_move
+        puzzle = self._pending_puzzle_snapshot
 
         def puzzle_fail() -> None:
             self.play_sound("sounds\\error-when-entering-the-game-menu-132111.mp3")
             self.popup_display_text("Puzzle Result",
                 f"Not Quite!\n"
-                f"Best Move Eval: {self.current_puzzle.evaluation}\n"
+                f"Best Move Eval: {puzzle.evaluation}\n"
                 f"Goal Eval: {goal_eval}\n"
-                f"Your Original Eval: {self.current_puzzle.latest_real_eval}\n"
-                f"Your Last Try: {self.current_puzzle.latest_practice_eval}\n"
+                f"Your Original Eval: {puzzle.latest_real_eval}\n"
+                f"Your Last Try: {puzzle.latest_practice_eval}\n"
                 f"This Try: {new_eval}")
             self.gui_board.highlight_moves(((move, red),))
 
         def puzzle_success() -> None:
             self.play_sound("sounds\\success-1-6297.mp3")
             highlights = [(move, green)]
-            if self.current_puzzle.latest_attempt_move is not None:
-                highlights.append((self.current_puzzle.latest_attempt_move_object, red))
+            if puzzle.latest_attempt_move is not None:
+                highlights.append((puzzle.latest_attempt_move_object, red))
             self.gui_board.highlight_moves(tuple(highlights))
 
-        if engine_move == move:
+        if engine_agreed:
             puzzle_success()
             return
 
-        goal_eval = puzzle_goal_eval(whose_turn=self.current_puzzle.whose_turn,
-                                     latest_practice_eval=self.current_puzzle.latest_practice_eval,
-                                     latest_real_eval=self.current_puzzle.latest_real_eval,
-                                     puzzle_evaluation=self.current_puzzle.evaluation)
-        if self.current_puzzle.whose_turn == chess.WHITE:
+        goal_eval = puzzle_goal_eval(whose_turn=puzzle.whose_turn,
+                                     latest_practice_eval=puzzle.latest_practice_eval,
+                                     latest_real_eval=puzzle.latest_real_eval,
+                                     puzzle_evaluation=puzzle.evaluation)
+        if puzzle.whose_turn == chess.WHITE:
             if new_eval >= goal_eval:
                 puzzle_success()
             else:
@@ -853,21 +909,37 @@ class MainWindow(QMainWindow):
                 time_taken_seconds=(datetime.datetime.now() - self._current_game_review_position_start_time).total_seconds())
         self.review_attempt += 1
 
-        original_next_position = self.game_node.next()
-        this_attempt_next_board = self.board.copy()
-        this_attempt_next_board.push(move)
+        # Unlike puzzle mode, the move isn't played yet: today's resolution logic
+        # (see _on_review_move_evaluated) sometimes shows the real game's own next
+        # move instead of what the player typed, or nothing at all, or pops back to
+        # the parent node - which node ends up showing depends on the scoring
+        # outcome, so playing the attempted move optimistically here could show the
+        # wrong thing. Everything the resolution needs is captured now instead.
+        self._review_request_id += 1
+        request_id = self._review_request_id
+        pre_move_board = self.board
+        self._pending_review_move = move
+        self._pending_review_node = self.game_node
+        self._pending_review_turn = self.turn
+        self._pending_review_is_mainline = self.game_node.is_mainline()
+        self._pending_review_original_next = self.game_node.next()
 
-        engine_move = self.database.engine_move(board=self.board, engine=self.combined_engines.stockfish(),
-                                                 depth_value=23, multipv=1)
-        engine_move_board = self.board.copy()
-        engine_move_board.push(engine_move)
+        self.gui_board.start_pending_highlight(move)
+        original_next_fen = (self._pending_review_original_next.board().fen()
+                             if self._pending_review_original_next is not None else "")
+        self.review_move_requested.emit(request_id, pre_move_board.fen(), move.uci(), original_next_fen)
 
-        current_eval = self.combined_engines.stable_evaluation(min_depth=23, min_nodes=5000, max_depth=30,
-                                                                max_instability=0.009, board=self.board)
-        current_eval_2 = self.combined_engines.stable_evaluation(min_depth=23, min_nodes=5000, max_depth=30,
-                                                                  max_instability=0.009, board=engine_move_board)
-        new_eval = self.combined_engines.stable_evaluation(min_depth=23, min_nodes=5000, max_depth=30,
-                                                            max_instability=0.009, board=this_attempt_next_board)
+    def _on_review_move_evaluated(self, request_id: int, engine_agreed: bool, current_eval: float,
+                                  current_eval_2: float, new_eval: float, has_original_game_eval: bool,
+                                  original_game_eval: float) -> None:
+        if request_id != self._review_request_id:
+            return  # a newer review-move request has superseded this one - discard
+        self.gui_board.stop_pending_highlight()
+        move = self._pending_review_move
+        pre_move_node = self._pending_review_node
+        pre_move_turn = self._pending_review_turn
+        is_mainline_before_move = self._pending_review_is_mainline
+        original_next_position = self._pending_review_original_next
 
         def game_review_fail() -> None:
             self.play_sound("sounds\\error-when-entering-the-game-menu-132111.mp3")
@@ -881,16 +953,13 @@ class MainWindow(QMainWindow):
         def game_review_success() -> None:
             self.play_sound("sounds\\success-1-6297.mp3")
 
-            if self.game_node.is_mainline():
+            if is_mainline_before_move:
                 self.review_attempt = 0
                 if original_next_position is not None:
                     # Proceed to the next actual position from the game
                     original_move = original_next_position.move
                     self.play_move(original_move)
-                    original_game_eval = self.combined_engines.stable_evaluation(
-                        min_depth=23, min_nodes=5000, max_depth=30, max_instability=0.009,
-                        board=original_next_position.board())
-                    if self.turn != chess.WHITE:
+                    if pre_move_turn != chess.WHITE:
                         worse_for_mover = new_eval > original_game_eval
                     else:
                         worse_for_mover = new_eval < original_game_eval
@@ -904,27 +973,24 @@ class MainWindow(QMainWindow):
                 # Ok, we have found the "refutation" for the current board state which we got
                 # ourselves into by making a bad move. Now we go back up a step, hopefully
                 # until we get back to the actual mainline of the game!
-                self.game_node = self.game_node.parent
+                self.game_node = pre_move_node.parent
                 self.review_attempt = 999
 
-        if engine_move == move:
+        if engine_agreed:
             game_review_success()
             return
 
         if original_next_position is not None:
             # There is a next move in the game already (either a mainline move or an
             # already explored sub-variation)
-            original_game_eval = self.combined_engines.stable_evaluation(
-                min_depth=23, min_nodes=5000, max_depth=30, max_instability=0.009,
-                board=original_next_position.board())
-            goal_eval = review_goal_eval(turn=self.turn, current_eval=current_eval, current_eval_2=current_eval_2,
-                                        original_game_eval=original_game_eval)
+            goal_eval = review_goal_eval(turn=pre_move_turn, current_eval=current_eval, current_eval_2=current_eval_2,
+                                        original_game_eval=original_game_eval if has_original_game_eval else None)
         else:
             # There is not a next move already (either the game is over or we are going
             # down a new sub-variation)
-            goal_eval = review_goal_eval(turn=self.turn, current_eval=current_eval, current_eval_2=current_eval_2)
+            goal_eval = review_goal_eval(turn=pre_move_turn, current_eval=current_eval, current_eval_2=current_eval_2)
 
-        if self.turn == chess.WHITE:
+        if pre_move_turn == chess.WHITE:
             if new_eval >= goal_eval:
                 game_review_success()
             else:
@@ -937,8 +1003,20 @@ class MainWindow(QMainWindow):
 
     def on_engine_move_clicked(self) -> None:
         self.puzzle_attempt += 1
-        self.play_move(self.database.engine_move(board=self.board, engine=self.combined_engines.stockfish(),
-                                                   depth_value=20, multipv=1))
+        generation = self._eval_generation
+        self.engine_move_button.setEnabled(False)
+        self.engine_move_requested.emit(generation, self.board.fen())
+
+    def _on_engine_move_ready(self, generation: int, move_uci: str) -> None:
+        self.engine_move_button.setEnabled(True)
+        if generation != self._eval_generation:
+            return
+        self.play_move(chess.Move.from_uci(move_uci))
+
+    def _on_eval_worker_failed(self, request_id: int, message: str) -> None:
+        print(f"Background evaluation failed: {message}")
+        self.gui_board.stop_pending_highlight()
+        self.engine_move_button.setEnabled(True)
 
     def play_move(self, move: Move):
         """Update the current board state with the given move, highlighting what's changed."""
@@ -956,6 +1034,11 @@ class MainWindow(QMainWindow):
     
     @game_node.setter
     def game_node(self, value: chess.pgn.GameNode):
+        # Every position change invalidates any pending background evaluation -
+        # bump this before anything else so requests captured after this point
+        # (even later in this same setter call) are correctly considered "current".
+        self._eval_generation += 1
+
         # Update Board
         self._game_node = value
         self.game_node_change_signal.emit(value)
@@ -965,14 +1048,14 @@ class MainWindow(QMainWindow):
         self.gui_board.board = self.board
 
     def _refresh_position_info(self, game_node: chess.pgn.GameNode) -> None:
-        """Recomputes everything PositionInfoWidget shows for the current position."""
+        """
+        Recomputes everything PositionInfoWidget shows for the current position.
+        The Stockfish/Leela eval shown is whatever was last computed for this exact
+        position - instantly, but possibly stale/placeholder - with the real
+        (possibly updated) numbers patched in by _on_position_info_evaluated()
+        once the background evaluation finishes.
+        """
         self.turn_label.setText("White to move" if self.mirror_aware_turn == chess.WHITE else "Black to move")
-
-        stockfish_eval = self.combined_engines.stockfish_evaluation(depth=25, board=self.board)
-        leela_eval = self.combined_engines.leela_evaluation(nodes=100_000, board=self.board)
-        if self.mirrored:
-            stockfish_eval = 1 - stockfish_eval
-            leela_eval = 1 - leela_eval
 
         if self.current_puzzle is not None:
             puzzle_summary = (f"Priority: {self.current_puzzle.priority}\n"
@@ -984,12 +1067,20 @@ class MainWindow(QMainWindow):
         self.position_info_widget.update_position(
             position=self.position,
             last_seen=self.database.position_last_played(self.position),
-            stockfish_eval=stockfish_eval,
-            leela_eval=leela_eval,
             name=self.position_name,
             comment=self.review_comment,
             manual_evaluation=self.review_evaluation,
             puzzle_summary=puzzle_summary)
+
+        generation = self._eval_generation
+        self.position_info_requested.emit(generation, self.board.fen())
+
+    def _on_position_info_evaluated(self, generation: int, stockfish_eval: float, leela_eval: float) -> None:
+        if generation != self._eval_generation:
+            return
+        if self.mirrored:  # a pure display transform, read fresh here rather than captured at request time
+            stockfish_eval, leela_eval = 1 - stockfish_eval, 1 - leela_eval
+        self.position_info_widget.update_evals(stockfish_eval, leela_eval)
 
 
 

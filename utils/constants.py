@@ -91,6 +91,7 @@ blue = (0, 0, 255)
 purple = (160, 32, 255)
 yellow = (255, 224, 32)
 orange = (255, 128, 0)
+pending = (0, 180, 220)  # "evaluation in progress" flash, distinct from red/green/yellow
 
 APP_NAME = 'Sensei'
 APP_VERSION = 'V2.0.0'

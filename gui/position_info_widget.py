@@ -51,13 +51,18 @@ class PositionInfoWidget(QWidget):
     def update_position(self,
                         position: str,
                         last_seen,
-                        stockfish_eval: float,
-                        leela_eval: float,
                         name: str,
                         comment: str,
                         manual_evaluation,
-                        puzzle_summary: str) -> None:
-        """Repopulates every field for a newly-displayed position."""
+                        puzzle_summary: str,
+                        stockfish_eval="Evaluating…",
+                        leela_eval="Evaluating…") -> None:
+        """
+        Repopulates every field for a newly-displayed position. stockfish_eval/
+        leela_eval default to a placeholder since they come from a background
+        engine evaluation that hasn't necessarily finished yet - call update_evals()
+        once it has.
+        """
         self._position = position
 
         self.name_edit.blockSignals(True)
@@ -79,6 +84,12 @@ class PositionInfoWidget(QWidget):
         self.stockfish_eval_label.setText(f"Stockfish evaluation: {stockfish_eval}")
         self.leela_eval_label.setText(f"Leela evaluation: {leela_eval}")
         self.puzzle_info_label.setText(puzzle_summary)
+
+    def update_evals(self, stockfish_eval: float, leela_eval: float) -> None:
+        """Patches in the real Stockfish/Leela evaluations once the background
+        evaluation that update_position() left pending has finished."""
+        self.stockfish_eval_label.setText(f"Stockfish evaluation: {stockfish_eval}")
+        self.leela_eval_label.setText(f"Leela evaluation: {leela_eval}")
 
     def _save_name(self) -> None:
         if self._position is not None:
