@@ -7,7 +7,7 @@ from utils.square import Square
 import gui.square
 
 from utils.constants import *
-import utils.colours
+from gui.popups import PromotionPickerDialog
 
 from PySide6.QtWidgets import QPushButton, QDialog, QGridLayout, QGraphicsRectItem, QVBoxLayout, QLabel, QFrame
 from PySide6.QtCore import Qt
@@ -100,12 +100,22 @@ class Board(QDialog):
             self.current_selected_square = square
             self.board_buttons[x][y].select()
         else:
-            move = self.current_selected_square.move_to(square)
+            from_square = self.current_selected_square
 
-            old_board_x, old_board_y = self.square_to_xy(self.current_selected_square)
+            old_board_x, old_board_y = self.square_to_xy(from_square)
             self.board_buttons[old_board_x][old_board_y].deselect()
 
             self.current_selected_square = None
+
+            moved_piece = self.board.piece_type_at(from_square.internal_square)
+            reaches_back_rank = chess.square_rank(square.internal_square) in (0, 7)
+
+            if moved_piece == chess.PAWN and reaches_back_rank:
+                promotion_piece = PromotionPickerDialog.get_promotion_piece(stm=self.board.turn, parent=self)
+                move = chess.Move(from_square.internal_square, square.internal_square, promotion=promotion_piece)
+            else:
+                move = from_square.move_to(square)
+
             if move in self.board.legal_moves:
                 self.move_signal.emit(move)
                 print(f"Move {move} emitted.")
@@ -128,9 +138,10 @@ class Board(QDialog):
         self.update_labels()
 
         # Highlight most recent move
+        self.clear_highlights()
         if self.board.move_stack:
             move = self.board.peek()
-            self.highlight_moves(move_colour_tuple=[(move, utils.colours.green)], highlight_strength=0.5)
+            self.highlight_moves(move_colour_tuple=[(move, yellow)], highlight_strength=0.5)
 
     def update_labels(self) -> None:
         """Updates the labels."""
@@ -148,11 +159,14 @@ class Board(QDialog):
         for square, colour in square_colour_tuple:
             if isinstance(square, int):
                 square = Square(square)
-            btn_sq = self.window.find_element(key=(square.rank_id, square.file_id))
-            is_dark_square = True if (square.rank_id + square.file_id + self.mirrored) % 2 else False
-            base_color = dark_gray if is_dark_square else light_gray
-            new_color = tuple(round(c1 * (1 - highlight_strength) + c2 * highlight_strength) for c1, c2 in zip(base_color, colour))
-            self.set_element_color_rgb(btn_sq, new_color)
+            x, y = self.square_to_xy(square)
+            self.board_buttons[x][y].highlight = (*colour, highlight_strength)
+
+    def clear_highlights(self) -> None:
+        """Resets all squares back to their unhighlighted base colour."""
+        for x in range(8):
+            for y in range(8):
+                self.board_buttons[x][y].highlight = (0, 0, 0, 0)
 
     def highlight_moves(self, move_colour_tuple: tuple, highlight_strength: float = 0.5) -> None:
         """

@@ -1,10 +1,20 @@
-import chess
-import chess.svg
+#!/usr/bin/env python3
 
-# A board object
-board = chess.Board()
+import sys
 
-# A move object
-chess.Move.from_uci("a2a4")
+from PySide6.QtWidgets import QApplication
 
-chess.svg.piece(chess.Piece.from_symbol("R"))
+from gui.main_window import MainWindow
+
+
+def main() -> None:
+    app = QApplication(sys.argv)
+
+    window = MainWindow()
+    window.show()
+
+    sys.exit(app.exec())
+
+
+if __name__ == "__main__":
+    main()
