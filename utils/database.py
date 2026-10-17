@@ -1176,18 +1176,34 @@ class Database:
 
     def full_engine_evaluation(self,
                                engine: Engine,
-                               depth_value: int):
-        """Ensure full coverage in cached engine evaluations for the given engine at the wanted depth"""
+                               depth_value: int,
+                               progress_callback=None,
+                               should_stop=None):
+        """
+        Ensure full coverage in cached engine evaluations for the given engine at the
+        wanted depth.
+
+        :param progress_callback: if given, called with (positions_done, positions_total)
+            after each position is evaluated (e.g. to drive a progress bar).
+        :param should_stop: if given, checked before each position; evaluation stops
+            (committing whatever's been done so far) as soon as it returns True.
+        """
         positions_to_evaluate = self.all_positions() - set([i[0] for i in self.con.execute(f"SELECT position FROM {engine.evaluations_table} WHERE {engine.depth_parameter} >= {depth_value}").fetchall()])
+        total = len(positions_to_evaluate)
         for n, i in enumerate(positions_to_evaluate):
+            if should_stop is not None and should_stop():
+                break
+
             fen = f"{i} 0 0"
             board = chess.Board(fen=fen)
             if board.is_valid():
                 self.engine_evaluation(board=board, engine=engine, depth_value=depth_value, commit=False)
-                print(f"{engine.name} evaluation done! {n} / {len(positions_to_evaluate)}")
+                print(f"{engine.name} evaluation done! {n} / {total}")
+                if progress_callback is not None:
+                    progress_callback(n + 1, total)
                 if n % 100 == 0:
                     self.con.commit()
-        
+
         self.con.commit()
     
     def read_combined_engine_evaluation(self,

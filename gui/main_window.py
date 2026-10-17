@@ -30,9 +30,9 @@ import PySide6.QtWidgets as QtWidgets
 from PySide6.QtGui import QAction
 from gui.board import Board
 from PySide6.QtMultimedia import QSoundEffect, QMediaPlayer, QAudioOutput
-from PySide6.QtCore import QUrl, Signal, QObject, Qt
-from gui.popups import TextboxPopup, TablePopup, DownloadProgressDialog
-from gui.workers import DownloadGamesWorker
+from PySide6.QtCore import QUrl, Signal, QObject, Qt, QTimer
+from gui.popups import TextboxPopup, TablePopup, DownloadProgressDialog, BuildPuzzlesProgressDialog
+from gui.workers import DownloadGamesWorker, BuildPuzzlesWorker
 from gui.position_info_widget import PositionInfoWidget
 
 
@@ -107,6 +107,11 @@ class MainWindow(QMainWindow):
         self.review_attempt = 0
         self.game_review_mode = False
         self._current_game_review_position_start_time: datetime.datetime = None
+
+        self._build_puzzles_worker: BuildPuzzlesWorker = None
+        self._build_puzzles_dialog: BuildPuzzlesProgressDialog = None
+        self._build_puzzles_failure: str = None
+        self.init_build_puzzles_status_bar()
 
         self._game = chess.pgn.Game()
         self._game_node = self.game
@@ -339,9 +344,89 @@ class MainWindow(QMainWindow):
             for action_name, callback in actions:
                 add_menu_action(menu, action_name, callback)
 
+    def init_build_puzzles_status_bar(self) -> None:
+        """A persistent "Build Puzzles" progress indicator in the status bar, visible
+        whenever the build is running - even if its dialog has been hidden/closed."""
+        self.build_puzzles_status_label = QtWidgets.QLabel()
+        self.build_puzzles_progress_bar = QtWidgets.QProgressBar()
+        self.build_puzzles_progress_bar.setMaximumWidth(200)
+        self.build_puzzles_stop_button = QtWidgets.QPushButton("Stop")
+        self.build_puzzles_stop_button.clicked.connect(self.stop_building_puzzles)
+
+        for widget in (self.build_puzzles_status_label, self.build_puzzles_progress_bar, self.build_puzzles_stop_button):
+            widget.setVisible(False)
+            self.statusBar().addPermanentWidget(widget)
+
     def build_puzzles(self) -> None:
-        self.database.full_engine_evaluation(engine=self.combined_engines.stockfish(), depth_value=12)
-        self.database.full_engine_evaluation(engine=self.combined_engines.leela(), depth_value=100)
+        """
+        Runs full Stockfish + Leela evaluation coverage in the background (see
+        BuildPuzzlesWorker), showing progress both in a dedicated dialog and in a
+        persistent status-bar indicator. If a build is already running, clicking
+        this again just re-shows its dialog rather than starting a second one.
+        """
+        if self._build_puzzles_worker is not None and self._build_puzzles_worker.isRunning():
+            self._build_puzzles_dialog.show()
+            self._build_puzzles_dialog.raise_()
+            self._build_puzzles_dialog.activateWindow()
+            return
+
+        worker = BuildPuzzlesWorker(database_file=self.database.file,
+                                    stockfish_path=self.settings["Stockfish Executable"],
+                                    leela_path=self.settings["Leela Executable"],
+                                    parent=self)
+        worker.progress.connect(self.on_build_puzzles_progress)
+        worker.failed.connect(self.on_build_puzzles_failed)
+        worker.finished.connect(self.on_build_puzzles_finished)
+        self._build_puzzles_worker = worker
+        self._build_puzzles_failure: str = None
+
+        self.build_puzzles_status_label.setText("Building puzzles: starting…")
+        for widget in (self.build_puzzles_status_label, self.build_puzzles_progress_bar, self.build_puzzles_stop_button):
+            widget.setVisible(True)
+
+        dialog = BuildPuzzlesProgressDialog(parent=self)
+        dialog.stop_requested.connect(self.stop_building_puzzles)
+        self._build_puzzles_dialog = dialog
+        dialog.show()
+
+        worker.start()
+
+    def stop_building_puzzles(self) -> None:
+        if self._build_puzzles_worker is not None:
+            self.build_puzzles_status_label.setText("Building puzzles: stopping…")
+            self._build_puzzles_worker.request_stop()
+
+    def on_build_puzzles_progress(self, phase: str, done: int, total: int) -> None:
+        self.build_puzzles_status_label.setText(f"Building puzzles ({phase}): {done} / {total}")
+        self.build_puzzles_progress_bar.setRange(0, total)
+        self.build_puzzles_progress_bar.setValue(done)
+        if self._build_puzzles_dialog is not None:
+            self._build_puzzles_dialog.update_progress(phase, done, total)
+
+    def on_build_puzzles_failed(self, message: str) -> None:
+        self._build_puzzles_failure = message
+        self.build_puzzles_status_label.setText(f"Build puzzles failed: {message}")
+        if self._build_puzzles_dialog is not None:
+            self._build_puzzles_dialog.show_failure(message)
+
+    def on_build_puzzles_finished(self) -> None:
+        worker = self._build_puzzles_worker
+        self._build_puzzles_worker = None
+
+        if self._build_puzzles_failure is not None:
+            # on_build_puzzles_failed already set the (more specific) message - leave
+            # it showing rather than overwriting it with a generic "Finished"/"Stopped"
+            return
+
+        final_text = "Stopped building puzzles." if (worker is not None and worker.stopped) else "Finished building puzzles."
+        self.build_puzzles_status_label.setText(final_text)
+        if self._build_puzzles_dialog is not None:
+            self._build_puzzles_dialog.show_finished(final_text)
+        QTimer.singleShot(4000, self.hide_build_puzzles_status)
+
+    def hide_build_puzzles_status(self) -> None:
+        for widget in (self.build_puzzles_status_label, self.build_puzzles_progress_bar, self.build_puzzles_stop_button):
+            widget.setVisible(False)
 
     def download_lichess_games(self, max_new_games, title: str) -> None:
         """

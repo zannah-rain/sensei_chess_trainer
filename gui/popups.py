@@ -6,6 +6,7 @@ from PySide6.QtWidgets import (QDialog, QVBoxLayout, QLabel, QPushButton, QFormL
                                 QCheckBox, QComboBox, QHBoxLayout, QWidget, QDialogButtonBox, QFileDialog,
                                 QTableWidget, QTableWidgetItem, QProgressBar)
 from PySide6.QtGui import QIcon, QPixmap
+from PySide6.QtCore import Signal
 
 from utils.constants import images, QUEENW, ROOKW, BISHOPW, KNIGHTW, QUEENB, ROOKB, BISHOPB, KNIGHTB
 
@@ -201,3 +202,60 @@ class DownloadProgressDialog(QDialog):
 
     def show_failure(self, message: str) -> None:
         self.status_label.setText(f"Download failed: {message}")
+
+
+class BuildPuzzlesProgressDialog(QDialog):
+    """
+    A progress view for the (potentially very long-running) "Build Puzzles" engine
+    evaluation pass, with two ways to stop watching it without stopping the work:
+
+    - "Run in Background" (or just closing the window) hides the dialog; the build
+      keeps running - MainWindow shows a persistent status-bar indicator for it
+      regardless of whether this dialog is open.
+    - "Stop" is the only thing that actually stops the build.
+    """
+
+    stop_requested = Signal()
+    run_in_background_requested = Signal()
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Build Puzzles")
+
+        self.phase_label = QLabel("Starting…")
+        self.progress_bar = QProgressBar()
+
+        stop_button = QPushButton("Stop")
+        stop_button.clicked.connect(self.stop_requested.emit)
+        background_button = QPushButton("Run in Background")
+        background_button.clicked.connect(self._run_in_background)
+
+        buttons_row = QHBoxLayout()
+        buttons_row.addWidget(stop_button)
+        buttons_row.addWidget(background_button)
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(self.phase_label)
+        layout.addWidget(self.progress_bar)
+        layout.addLayout(buttons_row)
+
+    def _run_in_background(self) -> None:
+        self.run_in_background_requested.emit()
+        self.hide()
+
+    def update_progress(self, phase: str, done: int, total: int) -> None:
+        self.phase_label.setText(f"{phase}: {done} / {total}")
+        self.progress_bar.setRange(0, total)
+        self.progress_bar.setValue(done)
+
+    def show_failure(self, message: str) -> None:
+        self.phase_label.setText(f"Failed: {message}")
+
+    def show_finished(self, message: str) -> None:
+        self.phase_label.setText(message)
+
+    def closeEvent(self, event) -> None:
+        # Closing the window (e.g. the titlebar X) behaves like "Run in Background" -
+        # the build keeps running regardless; only the Stop button actually stops it.
+        self.run_in_background_requested.emit()
+        event.accept()
