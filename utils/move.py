@@ -2,7 +2,6 @@ import chess
 from utils.square import Square
 from typing import List
 
-
 class Move:
     """
     A single object representing a specific move being made in a specific position.

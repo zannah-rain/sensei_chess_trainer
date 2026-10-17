@@ -241,7 +241,7 @@ class EasyChessGui:
         self.text_output_board_eval_leela.update(f"Leela evaluation: {leela_eval}")
              
         if self.current_puzzle is not None:
-            self.text_output_puzzle_priority.update(f"Review Priority: {self.current_puzzle.priority}")
+            self.text_output_puzzle_priority.update(f"Review Priority: {self.current_puzzle.priority}\nScheduled Puzzles: {self.database.cache_scheduled_puzzles}")
             self.text_output_puzzle_times_seen_in_real_games.update(f"Times seen in real games: {self.current_puzzle.times_seen_in_real_games}")
             self.text_output_puzzle_last_practiced_date.update(f"Time last practiced: {self.current_puzzle.latest_practiced_timestamp}")
             if self.puzzle_attempt == 0:
@@ -288,9 +288,14 @@ class EasyChessGui:
     def refresh_stats_tab(self) -> None:
         stats = dict(self.database.con.execute("SELECT * FROM move_stats").fetchall()[0])
 
+        todays_practice_moves = self.database.todays_practice_moves()
+
         total_eval_improvement_today = stats["sum_real_eval_loss_today"] - stats["sum_practice_eval_loss_today"]
+
         average_eval_loss_per_day = stats["this_month_total_real_eval_loss"] / 30
-        daily_eval_improvement_target = average_eval_loss_per_day * 2
+        average_eval_loss_per_game = ifnone(stats["average_real_eval_loss_alltime"], 0) * ifnone(stats["average_game_halfmoves_alltime"], 0) / 2
+
+        daily_eval_improvement_target = 2 * max(average_eval_loss_per_day, average_eval_loss_per_game)  #  average_eval_loss_per_day * 2
 
         self.progress_output_today_study.update(total_eval_improvement_today / daily_eval_improvement_target)
         self.progress_output_puzzles_study.update(total_eval_improvement_today / daily_eval_improvement_target)
@@ -302,14 +307,15 @@ class EasyChessGui:
             Puzzles done: {stats["positions_practiced_today"]}
             Average original eval loss: {ifnone(stats["average_real_eval_loss_today"], 0):.3f}
             Average new eval loss: {ifnone(stats["average_practice_eval_loss_today"], 0):.3f}
-            Improvement: {(1 - ifnone(stats["average_practice_eval_loss_today"], 0) / ifnone(stats["average_real_eval_loss_today"], 1)) * 100:.1f}%
+            Improvement: {(1 - ifnone(stats["average_practice_eval_loss_today"], 0) / ifnone(max(stats["average_real_eval_loss_today"], .0001), 1)) * 100:.1f}%
             Total Improvement vs Target: {total_eval_improvement_today:2f} vs {daily_eval_improvement_target:2f}
             """))
         self.text_output_alltime_games.update(dedent(f"""\
             Total games played: {stats["total_games_played"]}
             Average game length: {ifnone(stats["average_game_halfmoves_alltime"], 0) // 2}
             Average eval loss: {ifnone(stats["average_real_eval_loss_alltime"], 0):.3f}
-            Average eval loss per game: {ifnone(stats["average_real_eval_loss_alltime"], 0) * ifnone(stats["average_game_halfmoves_alltime"], 0) / 2:.2f}
+            Average eval loss per game: {average_eval_loss_per_game:.2f}
+            Average eval loss per day: {average_eval_loss_per_day:.2f}
             This month average eval loss: {ifnone(stats["this_month_average_real_eval_loss"], 0):.3f}
             Average time per move: {ifnone(stats["average_real_time_per_move_alltime"], 0):.1f}
             Total unique positions played: {stats["total_unique_real_positions_played_alltime"]}"""))
@@ -644,7 +650,7 @@ class EasyChessGui:
                           [sg.Frame(title="Puzzles", layout=[[self.text_output_alltime_puzzles]])]]
         review_layout = [[sg.Text("Manual Evaluation:"), self.text_io_review_evaluation],
                          [sg.Frame(title="Comment", layout=[[self.text_io_review_comment]])]]
-        moves_layout = [[sg.Frame(title="Moves", layout=[[self.table_output_moves]])]]
+        opening_book_layout = [[sg.Frame(title="Opening Book", layout=[[self.table_output_moves]])]]
         settings_layout = [[sg.Frame(title="Interaction", layout=[[]])]]
         console_layout = [[self.console_output]]
 
@@ -655,9 +661,9 @@ class EasyChessGui:
         tab_today=sg.Tab("Today", today_layout, key="today_tab")
         tab_alltime=sg.Tab("All-Time", alltime_layout, key="alltime_tab")
         tab_review=sg.Tab("Review", review_layout, key="review_tab")
-        tab_moves=sg.Tab("Moves", moves_layout, key="moves_tab")
+        tab_opening_book=sg.Tab("Opening Book", opening_book_layout, key="opening_book_tab")
         tab_console=sg.Tab("Console", console_layout, key="console_tab")
-        self.tab_container = sg.TabGroup([[tab_puzzles, tab_main, tab_today, tab_alltime, tab_review, tab_moves, tab_console]])
+        self.tab_container = sg.TabGroup([[tab_puzzles, tab_main, tab_today, tab_alltime, tab_review, tab_opening_book, tab_console]])
         # This titlegroup object may be further used
         # in the row of the main layout.
 
@@ -739,14 +745,15 @@ class EasyChessGui:
                                                                                           f"""Your Last Try: {self.current_puzzle.latest_practice_eval}\n"""
                                                                                           f"""This Try: {new_eval}""")
                                 print(f"FAIL:: Target Eval ({goal_eval}) - Your Eval ({new_eval})")
-                                self.highlight_moves(square_colour_tuple=((window_read_result, red),))
+                                self.highlight_moves(move_colour_tuple=((window_read_result, red),))
                             def puzzle_success() -> None:
                                 self.play_sound("sounds//success-1-6297.mp3")
                                 print(f"SUCCESS:: Target Eval ({goal_eval}) - Your Eval ({new_eval})")
-                                self.highlight_moves(square_colour_tuple=((self.current_puzzle.latest_attempt_move_object, red),
+                                self.highlight_moves(move_colour_tuple=((self.current_puzzle.latest_attempt_move_object, red),
                                                                           (window_read_result, green)))
 
                             self.play_move(move=window_read_result)
+                            self.refresh_stats_tab()
 
                             engine_move: chess.Move = self.database.engine_move(board=self.board, engine=self.combined_engines.stockfish(), depth_value=23, multipv=1)
                             if engine_move == window_read_result:
@@ -1090,37 +1097,75 @@ class EasyChessGui:
         for this_move, this_board in self.legal_next_boards.items():
             this_position = board_position(this_board)
             this_move_san = self.board.san(this_move)
+            this_move_row = {"move": this_move_san}
+            
             this_move_data = self.database.con.execute(f"""SELECT position,
                                                                   times_seen
                                                            FROM summarised_positions_seen_in_games
                                                            WHERE position = '{this_position}'""").fetchall()
+            if len(this_move_data) == 0:
+                this_move_row["times_seen"] = 0
+            else:
+                this_move_row["times_seen"] = tuple(this_move_data[0])[1]
+
             this_move_evaluation = self.database.con.execute(f"""SELECT manual_evaluation, name FROM positions WHERE position='{this_position}'""").fetchall()
+            if len(this_move_evaluation) == 0:
+                this_move_row["my_evaluation"] = [None, None]
+            else:
+                this_move_row["my_evaluation"] = [*tuple(this_move_evaluation[0])]
+
+            this_move_engine_evals = self.database.con.execute(f"""SELECT stockfish_evaluation, stockfish_depth, leela_evaluation, leela_nodes from combined_engine_evaluation WHERE position = '{this_position}'""").fetchall()
+            if len(this_move_engine_evals) == 0:
+                this_move_row["stockfish_evaluation"] = None
+                this_move_row["stockfish_depth"] = None
+                this_move_row["leela_evaluation"] = None
+                this_move_row["leela_nodes"] = None
+            else:
+                this_move_row["stockfish_evaluation"] = tuple(this_move_engine_evals[0])[0]
+                this_move_row["stockfish_depth"] = tuple(this_move_engine_evals[0])[1]
+                this_move_row["leela_evaluation"] = tuple(this_move_engine_evals[0])[2]
+                this_move_row["leela_nodes"] = tuple(this_move_engine_evals[0])[3]
+
             this_move_extra_data = self.database.con.execute(f"""SELECT quality,
                                                                         comment,
                                                                         in_repertoire
                                                                  FROM moves
                                                                  WHERE position = '{self.position}'
                                                                  AND resulting_position = '{this_position}'""").fetchall()
-
-            if len(this_move_data) == 0:
-                this_move_data = [this_move_san, 0]
-            else:
-                this_move_data = [this_move_san, tuple(this_move_data[0])[1]]
-            
-            if len(this_move_evaluation) == 0:
-                this_move_evaluation = [None, None]
-            else:
-                this_move_evaluation = [*tuple(this_move_evaluation[0])]
-
             if len(this_move_extra_data) == 0:
-                this_move_extra_data = ["", "", False]
+                this_move_row["quality"] = ""
+                this_move_row["comment"] = ""
+                this_move_row["in_repertoire"] = False
             else:
-                this_move_extra_data = [*tuple(this_move_extra_data[0])]
+                this_move_extra_data = tuple(this_move_extra_data[0])
+                this_move_row["quality"] = this_move_extra_data[0]
+                this_move_row["comment"] = this_move_extra_data[1]
+                this_move_row["in_repertoire"] = this_move_extra_data[2]
             
-            x.append(this_move_data+this_move_evaluation+this_move_extra_data)
+            this_move_fen = this_board.fen()
+            #this_move_lichess_amateur_stats = self.database.lichess_stats(fen=this_move_fen,
+            #                                                              variants=["standard"],
+            #                                                              speeds=["blitz", "rapid", "classical", "correspondence"],
+            #                                                              rating_bands=[2000,2200,2500],
+            #                                                              master_stats=False)
+            #if len(this_move_lichess_amateur_stats) == 0:
+            this_move_row["amateur_score"] = "Unknown"
+            #else:
+            #    this_move_row["amateur_score"] = (this_move_lichess_amateur_stats["white_wins"] + this_move_lichess_amateur_stats["draws"] / 2) / max(1, this_move_lichess_amateur_stats["white_wins"] + this_move_lichess_amateur_stats["black_wins"] + this_move_lichess_amateur_stats["draws"])
+            
+            x.append(this_move_row)
 
-        output = pd.DataFrame(x, columns=["move", "times_seen", "my_evaluation", "name", "quality", "comment", "in_repertoire"])
-        output = output[["move", "quality", "my_evaluation", "name", "comment", "in_repertoire", "times_seen"]]
+        output = pd.DataFrame(x, columns=["move", "times_seen", "my_evaluation", "name", "stockfish_evaluation", "stockfish_depth", "leela_evaluation", "leela_nodes", "quality", "comment", "in_repertoire", "amateur_score"])
+
+        output["stockfish"] = output["stockfish_evaluation"].astype(str).fillna("").replace("nan", "") + " @ " + output["stockfish_depth"].astype(str).fillna("").replace("nan", "")
+        output["leela"] = output["leela_evaluation"].astype(str).fillna("").replace("nan", "") + " @ " + (output["leela_nodes"].astype(float) / 1000).astype(str) + "k nodes"
+        output["stockfish_evaluation"] = output["stockfish_evaluation"].astype(str).fillna("").replace("nan", "")
+        output["stockfish_depth"] = output["stockfish_depth"].astype(str).fillna("").replace("nan", "")
+        output["leela_evaluation"] = output["leela_evaluation"].astype(str).fillna("").replace("nan", "")
+        output["leela_nodes"] = output["leela_nodes"].astype(str).fillna("").replace("nan", "")
+
+        output = output[["move", "quality", "my_evaluation", "stockfish", "leela", "name", "comment", "in_repertoire", "times_seen", "amateur_score"]]
+        output = output.sort_values("times_seen", ascending=False)
         if self.turn is not None:
             output = output.sort_values("my_evaluation", ascending=bool(1 - self.turn))
         output["my_evaluation"] = output["my_evaluation"].astype(str).fillna("").replace("nan", "")
