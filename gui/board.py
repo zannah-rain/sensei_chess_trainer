@@ -9,7 +9,7 @@ import gui.square
 from utils.constants import *
 from gui.popups import PromotionPickerDialog
 
-from PySide6.QtWidgets import QPushButton, QDialog, QGridLayout, QGraphicsRectItem, QVBoxLayout, QLabel, QFrame, QSizePolicy
+from PySide6.QtWidgets import QPushButton, QDialog, QGridLayout, QGraphicsRectItem, QVBoxLayout, QFrame, QSizePolicy
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QPixmap
 from PySide6.QtCore import Signal, Slot, QTimer
@@ -44,6 +44,10 @@ class Board(QDialog):
     """
 
     move_signal = Signal(chess.Move)
+    mirror_changed = Signal()  # fires whenever `mirrored` actually changes, e.g. so a
+                                # listener can refresh anything (turn label, eval
+                                # display) that depends on it without re-running an
+                                # expensive background evaluation for the same position
 
     def __init__(self, board: chess.Board = chess.Board(), parent=None) -> None:
         super(Board, self).__init__(parent)
@@ -56,9 +60,6 @@ class Board(QDialog):
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
         self.sub_layout = QVBoxLayout(self)
-
-        self.player_label = QLabel("{0} to play".format("White" if self.perspective == chess.WHITE else "Black"), self)
-        self.sub_layout.addWidget(self.player_label, alignment=Qt.AlignCenter)
 
         self.board_frame = SquareGridFrame(self)
         self.board_frame.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
@@ -188,17 +189,12 @@ class Board(QDialog):
     def board(self, value: chess.Board) -> None:
         self._board = value
         self.update_board_pieces_and_colours()
-        self.update_labels()
 
         # Highlight most recent move
         self.clear_highlights()
         if self.board.move_stack:
             move = self.board.peek()
             self.highlight_moves(move_colour_tuple=[(move, yellow)], highlight_strength=0.5)
-
-    def update_labels(self) -> None:
-        """Updates the labels."""
-        self.player_label.setText("{0} to play".format("White" if self.perspective == chess.WHITE else "Black"))
 
     def create_square_button(self, x: int, y: int) -> QGraphicsRectItem:
         """ Returns a QGraphicRectItem representing a square on the board. """
@@ -245,12 +241,13 @@ class Board(QDialog):
     def mirrored(self) -> bool:
         """Whether the colours have been swapped in displays without changing them in the back end stuff."""
         return self._mirrored
-    
+
     @mirrored.setter
     def mirrored(self, value) -> None:
         if value != self.mirrored:
             self._mirrored = value
             self.update_board_pieces_and_colours()
+            self.mirror_changed.emit()
 
     def translate_coordinates(self, rank: int, file: int) -> Tuple[int, int]:
         """
@@ -325,7 +322,13 @@ class Board(QDialog):
 
             if pc is not None:
                 pt = pc.piece_type
-                c = pc.color % 2
+                # Mirroring is meant to swap which colour each piece is *displayed*
+                # as (so a puzzle doesn't always visually look like "a White
+                # puzzle"), without changing the real side to move - MainWindow's
+                # mirror_aware_turn and its eval-flipping already assume this swap
+                # happens; it has to happen here for them to be showing the truth.
+                displayed_color = (not pc.color) if self.mirrored else pc.color
+                c = displayed_color % 2
                 if c:
                     if pt == chess.PAWN:
                         piece_r.append(PAWNW)

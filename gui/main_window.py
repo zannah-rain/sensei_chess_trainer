@@ -118,6 +118,7 @@ class MainWindow(QMainWindow):
 
         self.gui_board = Board()
         self.gui_board.move_signal.connect(self.on_board_move)
+        self.gui_board.mirror_changed.connect(self._refresh_mirror_dependent_display)
         vertical_layout_1.addWidget(self.gui_board)
 
         self.init_menu()
@@ -129,6 +130,8 @@ class MainWindow(QMainWindow):
         # navigation never block on Stockfish/Leela. See gui/eval_worker.py.
         self._eval_generation = 0
         self._review_request_id = 0
+        self._last_stockfish_eval: float = None  # unmirrored; re-flipped on demand, see _apply_mirror_dependent_display
+        self._last_leela_eval: float = None
         self._eval_thread = QThread(self)
         self._eval_worker = EvaluationWorker(database_file=self.database.file,
                                              stockfish_path=self.settings["Stockfish Executable"],
@@ -1089,7 +1092,12 @@ class MainWindow(QMainWindow):
         (possibly updated) numbers patched in by _on_position_info_evaluated()
         once the background evaluation finishes.
         """
-        self.turn_label.setText("White to move" if self.mirror_aware_turn == chess.WHITE else "Black to move")
+        # The cached eval is for the position being left behind - drop it so a
+        # Mirror click before the new position's own evaluation arrives doesn't
+        # redisplay stale, wrong-position numbers (see _apply_mirror_dependent_display).
+        self._last_stockfish_eval = None
+        self._last_leela_eval = None
+        self._apply_mirror_dependent_display()
 
         if self.current_puzzle is not None:
             puzzle_summary = (f"Priority: {self.current_puzzle.priority}\n"
@@ -1112,9 +1120,30 @@ class MainWindow(QMainWindow):
     def _on_position_info_evaluated(self, generation: int, stockfish_eval: float, leela_eval: float) -> None:
         if generation != self._eval_generation:
             return
-        if self.mirrored:  # a pure display transform, read fresh here rather than captured at request time
-            stockfish_eval, leela_eval = 1 - stockfish_eval, 1 - leela_eval
-        self.position_info_widget.update_evals(stockfish_eval, leela_eval)
+        # Cached unmirrored, so _refresh_mirror_dependent_display() can redisplay
+        # these (flipped the other way) if the user toggles Mirror afterwards,
+        # without re-running the (slow) background evaluation for the same position.
+        self._last_stockfish_eval = stockfish_eval
+        self._last_leela_eval = leela_eval
+        self._apply_mirror_dependent_display()
+
+    def _refresh_mirror_dependent_display(self) -> None:
+        """
+        Connected to Board.mirror_changed: re-shows the turn label and the last-known
+        eval (flipped the other way) after the user toggles Mirror, which otherwise
+        changes what's drawn on the board without MainWindow ever finding out - these
+        don't need a fresh background evaluation, since the real position hasn't
+        changed, only how it's displayed.
+        """
+        self._apply_mirror_dependent_display()
+
+    def _apply_mirror_dependent_display(self) -> None:
+        self.turn_label.setText("White to move" if self.mirror_aware_turn == chess.WHITE else "Black to move")
+        if self._last_stockfish_eval is not None and self._last_leela_eval is not None:
+            stockfish_eval, leela_eval = self._last_stockfish_eval, self._last_leela_eval
+            if self.mirrored:
+                stockfish_eval, leela_eval = 1 - stockfish_eval, 1 - leela_eval
+            self.position_info_widget.update_evals(stockfish_eval, leela_eval)
 
 
 
