@@ -1,45 +1,8 @@
 #!/usr/bin/env python3
-""" 
-python_easy_chess_gui.py
-
-Requirements:
-    Python 3.7.3 and up
-
-PySimpleGUI Square Mapping
-board = [
-    56, 57, ... 63
-    ...
-    8, 9, ...
-    0, 1, 2, ...
-]
-
-row = [
-    0, 0, ...
-    1, 1, ...
-    ...
-    7, 7 ...
-]
-
-col = [
-    0, 1, 2, ... 7
-    0, 1, 2, ...
-    ...
-    0, 1, 2, ... 7
-]
-
-
-Python-Chess Square Mapping
-board is the same as in PySimpleGUI
-row is reversed
-col is the same as in PySimpleGUI
-
-"""
 
 import PySimpleGUI as sg
-import os
 import sys
 import queue
-import copy
 import chess
 import chess.pgn
 import chess.engine
@@ -49,38 +12,29 @@ import platform as sys_plat
 from utils.constants import *
 from utils.position import *
 from utils.puzzle import Puzzle
-from utils.engine import Engine, EngineEvaluationResult
 from zPosition import zPosition
 from pathlib import Path
 from typing import Dict, Tuple
 from utils.database import Database, position_to_fen
-import json
 from utils.settings import Settings
-import psutil
 from globals import username
 import datetime
-import playsound
 import random
 import pandas as pd
 from utils.promotion_select_window import select_promotion_piece
 from textwrap import dedent
 from io import StringIO
 from utils.gui import RoundedButton
+import utils.combined_engines
 import utils.colours
 from utils.square import Square
 from utils.move import Move
+from utils.gui_board import GUIBoard
 
 logging.basicConfig(level=logging.INFO)
 
 platform = sys.platform
 sys_os = sys_plat.system()
-
-APP_NAME = 'Sensei'
-APP_VERSION = 'v1.0.0'
-BOX_TITLE = '{} {}'.format(APP_NAME, APP_VERSION)
-
-MIN_DEPTH = 1
-MAX_DEPTH = 1000
 
 
 menu_def_neutral = [
@@ -103,18 +57,7 @@ menu_def_neutral = [
 def ifnone(x, y):
     if x is None:
         return y
-    return x
-
-
-# Default board color is brown
-light_gray = (224, 224, 224)
-dark_gray = (158, 158, 158)
-red = (255, 0, 0)
-green = (0, 255, 0)
-blue = (0, 0, 255)
-purple = (160, 32, 255)
-yellow = (255, 224, 32)
-orange = (255, 128, 0)
+    return 
 
 
 class EasyChessGui:
@@ -122,17 +65,20 @@ class EasyChessGui:
     
     def __init__(self, theme):
         # Initialise hidden stuff first as properties might depend on them existing
-        self._stockfish = None
-        self._leela = None
-        self._board_perspective = chess.WHITE
-        self._mirrored = False
 
-        self.database = Database()
+        self.gui_board = GUIBoard()
 
         self.settings = Settings(schema={"Stockfish Executable": "Path",
                                          "Leela Executable": "Path"},
                                  save_file=Path("EasyChessGuiSettings.json"),
                                  settings_screen_title="Sensei Settings:")
+
+        self._board_perspective = chess.WHITE
+        self._mirrored = False
+
+        self.database = Database()
+
+        self.combined_engines = utils.combined_engines.CombinedEngines(settings=self.settings, database=self.database)
 
         self.theme: str = theme
         self.gui_theme: str = theme
@@ -188,6 +134,7 @@ class EasyChessGui:
         self.move_from = None
 
     def play_sound(self, sound_file: Path) -> None:
+        import playsound
         try:
             playsound.playsound(sound=sound_file, block=False)
         except playsound.PlaysoundException as e:
@@ -217,29 +164,6 @@ class EasyChessGui:
         """The time the current puzzle was started"""
         return self._current_puzzle_start_time
 
-    def engines(self) -> Dict[str, Engine]:
-        return {"stockfish": self.stockfish(), "leela": self.leela()}
-    
-    def stockfish(self) -> Engine:
-        if self._stockfish is None:
-            print("Starting Stockfish")
-            self._stockfish = Engine(engine=chess.engine.SimpleEngine.popen_uci(self.settings["Stockfish Executable"]), 
-                                     name="stockfish",
-                                     depth_parameter="depth")
-            self._stockfish.configure({"Hash": int(psutil.virtual_memory().available / 1024 / 1024 * 0.3)})  # 75% of available ram
-            self._stockfish.configure({"Threads": int(psutil.cpu_count(logical=True) - 3)})
-        
-        return self._stockfish
-
-    def leela(self) -> Engine:
-        if self._leela is None:
-            print("Starting Leela")
-            self._leela = Engine(engine=chess.engine.SimpleEngine.popen_uci(self.settings["Leela Executable"]), 
-                                 name="leela",
-                                 depth_parameter="nodes")
-        
-        return self._leela
-
     @property
     def game(self) -> chess.pgn.Game:
         return self._game
@@ -253,52 +177,6 @@ class EasyChessGui:
     def game_node(self) -> chess.pgn.GameNode:
         return self._game_node
     
-    def stockfish_evaluation(self, depth, board=None) -> EngineEvaluationResult:
-        if board is None:
-            board = self.board
-        return self.database.engine_evaluation(board=board, engine=self.stockfish(), depth_value=depth)
-    
-    def leela_evaluation(self, nodes, board=None) -> EngineEvaluationResult:
-        if board is None:
-            board = self.board
-        return self.database.engine_evaluation(board=board, engine=self.leela(), depth_value=nodes)
-    
-    def combined_evaluation(self, depth, nodes, board=None) -> float:
-        if board is None:
-            board = self.board
-        self.stockfish_evaluation(depth, board=board)
-        self.leela_evaluation(nodes, board=board)
-        return self.database.read_combined_engine_evaluation(board=board)
-    
-    def stable_evaluation(self, min_depth, min_nodes, max_depth, max_instability: float, board=None) -> float:
-        """
-        To help in situations where evaluation is very unstable (and can move a lot from one ply to the next).
-        Keeps increasing depth until the difference in evaluation from one step to another is less than max_instability.
-        """
-        if board is None:
-            board = self.board
-
-        current_depth = min_depth
-        current_nodes = min_nodes
-
-        while current_depth < max_depth:
-            current_eval = self.combined_evaluation(depth=current_depth, nodes=current_nodes, board=board)
-
-            engine_move = self.database.engine_move(board=board, engine=self.stockfish(), depth_value=current_depth, multipv=1)
-            engine_next_position = board.copy()
-            engine_next_position.push(engine_move)
-            next_eval = self.combined_evaluation(depth=current_depth, nodes=current_nodes, board=engine_next_position)
-
-            if abs(next_eval - current_eval) > max_instability:
-                current_depth += 4
-                current_nodes += 5000
-                print(f"Unstable engine evaluation, increasing depth to {current_depth}")
-                continue
-
-            return next_eval
-        
-        return next_eval
-    
     @property
     def turn(self) -> bool:
         if self.game_node is None:
@@ -306,14 +184,18 @@ class EasyChessGui:
         return self.game_node.turn()  # Does NOT account for mirroring, this is the underlying value that can be fed to engines etc
     
     @property
+    def mirrored(self) -> bool:
+        """Whether the board is mirrored or not"""
+        return self.gui_board.mirrored
+    
+    @property
     def mirror_aware_turn(self) -> bool:
-        return (self.turn + self._mirrored) % 2
+        return (self.turn + self.mirrored) % 2
     
     @game_node.setter
     def game_node(self, value: chess.pgn.GameNode):
         # Update Board
         self._game_node = value
-        self._psg_board = self.fen_to_psg_board()
         self.redraw_board()
 
         self._current_game_review_position_start_time = datetime.datetime.now()
@@ -349,8 +231,8 @@ class EasyChessGui:
         else:
             self.text_output_board_date_seen.update(f"Position not seen in a real game")
 
-        stockfish_eval = self.stockfish_evaluation(depth=25)
-        leela_eval = self.leela_evaluation(nodes=100_000)
+        stockfish_eval = self.combined_engines.stockfish_evaluation(depth=25, board=self.board)
+        leela_eval = self.combined_engines.leela_evaluation(nodes=100_000, board=self.board)
         if self.mirrored:
             stockfish_eval = 1 - stockfish_eval
             leela_eval = 1 - leela_eval
@@ -481,57 +363,8 @@ class EasyChessGui:
         return zPosition(fen=self.fen)
 
     @property
-    def psg_board(self):
-        return self._psg_board
-
-    @property
     def fen(self) -> str:
         return self.board.fen()
-    
-    @property
-    def mirrored(self) -> bool:
-        """Whether the colours have been swapped in displays without changing them in the back end stuff."""
-        return self._mirrored
-    
-    @mirrored.setter
-    def mirrored(self, value) -> None:
-        if value != self.mirrored:
-            self._mirrored = value
-            self.create_new_window()
-            self.game_node = self.game_node
-    
-    @property
-    def board_perspective(self) -> bool:
-        """chess.WHITE (1) or chess.BLACK (0). Determines the perspective the board is drawn from, independently from whos turn it is."""
-        return self._board_perspective
-    
-    @board_perspective.setter
-    def board_perspective(self, value: bool) -> None:
-        if value != self._board_perspective:
-            # Flip da board!
-            self._board_perspective: bool = value
-            self.create_new_window()
-            self.game_node = self.game_node
-
-    def flip_board(self) -> None:
-        """Flips the perspective (NOT THE COLOURS!)"""
-        self.board_perspective = not self.board_perspective
-
-    def randomise_perspective_and_mirroring(self) -> None:
-        new_perspective: bool = random.choice([chess.WHITE, chess.BLACK])
-        new_mirroring: bool = random.choice([True, False])
-
-        if new_perspective != self.board_perspective:
-            if new_mirroring != self.mirrored:
-                self._board_perspective = new_perspective
-                self._mirrored = new_mirroring
-                self.create_new_window()
-                self.game_node = self.game_node
-            else:
-                self.board_perspective = new_perspective
-        else:
-            self.mirrored = new_mirroring
-
 
     def popup_display_table(self, popup_title: str, data: pd.DataFrame) -> None:
         """Display a table of data in a pop up window"""
@@ -588,96 +421,6 @@ class EasyChessGui:
                   [sg.B('OK')]]).read(close=True)
         return event, values
 
-    def fen_to_psg_board(self):
-        """ Update psg_board based on FEN """
-        psgboard = []
-
-        # Get piece locations only to build psg board
-        pc_locations: str = self.fen.split()[0]
-
-        board = chess.BaseBoard(board_fen=pc_locations)
-        old_r = None
-
-        for s in chess.SQUARES:
-            r = chess.square_rank(s)
-
-            if old_r is None:
-                piece_r = []
-            elif old_r != r:
-                psgboard.append(piece_r)
-                piece_r = []
-            elif s == 63:
-                psgboard.append(piece_r)
-
-            try:
-                pc = board.piece_at(s^56)
-            except Exception:
-                pc = None
-                print('Failed to get piece.')
-
-            if pc is not None:
-                pt = pc.piece_type
-                c = (pc.color + self.mirrored) % 2
-                if c:
-                    if pt == chess.PAWN:
-                        piece_r.append(PAWNW)
-                    elif pt == chess.KNIGHT:
-                        piece_r.append(KNIGHTW)
-                    elif pt == chess.BISHOP:
-                        piece_r.append(BISHOPW)
-                    elif pt == chess.ROOK:
-                        piece_r.append(ROOKW)
-                    elif pt == chess.QUEEN:
-                        piece_r.append(QUEENW)
-                    elif pt == chess.KING:
-                        piece_r.append(KINGW)
-                else:
-                    if pt == chess.PAWN:
-                        piece_r.append(PAWNB)
-                    elif pt == chess.KNIGHT:
-                        piece_r.append(KNIGHTB)
-                    elif pt == chess.BISHOP:
-                        piece_r.append(BISHOPB)
-                    elif pt == chess.ROOK:
-                        piece_r.append(ROOKB)
-                    elif pt == chess.QUEEN:
-                        piece_r.append(QUEENB)
-                    elif pt == chess.KING:
-                        piece_r.append(KINGB)
-
-            # Else if pc is None or square is empty
-            else:
-                piece_r.append(BLANK)
-
-            old_r = r
-
-        return list(reversed(psgboard))
-    
-    def _set_element_color_rgb(self, element, color: tuple):
-        """ Set element color based on rgb """
-        hex_color = utils.colours.rgb_to_hex(color)
-        element.Update(button_color=('white', hex_color))
-    
-    def highlight_squares(self, square_colour_tuple: Tuple[Tuple[Square, tuple]], highlight_strength: float = 0.5) -> None:
-        """
-        Change the color of a square based on row & col. Adds the given colour to the base colour of that square.
-        """
-        for square, colour in square_colour_tuple:
-            if isinstance(square, int):
-                square = Square(square)
-            btn_sq = self.window.find_element(key=(square.rank_id, square.file_id))
-            is_dark_square = True if (square.rank_id + square.file_id + self.mirrored) % 2 else False
-            base_color = dark_gray if is_dark_square else light_gray
-            new_color = tuple(round(c1 * (1 - highlight_strength) + c2 * highlight_strength) for c1, c2 in zip(base_color, colour))
-            self._set_element_color_rgb(btn_sq, new_color)
-
-    def highlight_moves(self, move_colour_tuple: tuple, highlight_strength: float = 0.5) -> None:
-        """
-        Change the color of squares relevant to the given moves. Adds the given colour to the base colour of that square.
-        """
-        square_colour_tuple = tuple([(move.from_square, colour) for move, colour in move_colour_tuple]) + tuple([(move.to_square, colour) for move, colour in move_colour_tuple])
-        self.highlight_squares(square_colour_tuple=square_colour_tuple, highlight_strength=highlight_strength)
-
     def relative_row(self, s: Square | chess.Square, stm):
         """
         The board can be viewed, as white at the bottom and black at the
@@ -690,33 +433,6 @@ class EasyChessGui:
         if isinstance(s, Square):
             s = s.id
         return chess.square_rank(s) if stm else 7 - chess.square_rank(s)
-
-    def redraw_board(self):
-        """
-        Redraw board at start and afte a move.
-
-        :param window:
-        :return:
-        """
-        for i in range(8):
-            for j in range(8):
-                color = dark_gray if (i + j + self.mirrored + 1) % 2 else \
-                        light_gray
-                piece_image = images[self.psg_board[i][j]]
-                elem = self.window.find_element(key=(i, j))
-                self._set_element_color_rgb(elem, color)
-                elem.Update(image_filename=piece_image)
-
-    def render_square(self, image, key, location):
-        """ Returns an RButton (Read Button) with image image """
-        if (location[0] + location[1] + self.mirrored) % 2:
-            color = dark_gray  # Dark square
-        else:
-            color = light_gray
-        color = utils.colours.rgb_to_hex(color)
-        return sg.RButton('', image_filename=image, size=(1, 1),
-                          border_width=0, button_color=('white', color),
-                          pad=(0, 0), key=key)
 
     def get_promo_piece(self, move, stm, human):
         """
@@ -787,7 +503,7 @@ class EasyChessGui:
                 if move_to == self.move_from:
                     # Restore the color of the pressed board square
                     color = dark_gray if (to_row + to_col + self.mirrored + 1) % 2 else light_gray
-                    self._set_element_color_rgb(button_square, color)
+                    self.gui_board.set_element_color_rgb(button_square, color)
                     self.move_state = 0
                     return None
 
@@ -819,7 +535,7 @@ class EasyChessGui:
                         if (self.move_from.tuple[0] + self.move_from.tuple[1] + self.mirrored) % 2 else light_gray
 
                     # Restore the color of the fr square
-                    self._set_element_color_rgb(button_square, color)
+                    self.gui_board.set_element_color_rgb(button_square, color)
                     return None
                 
         return window_read_result
@@ -852,32 +568,6 @@ class EasyChessGui:
             return None
         self.game_node = self.game_node.add_variation(move=move)
         return None
-
-    def create_board(self):
-        """
-        Returns board layout based on color of user. If user is white,
-        the white pieces will be at the bottom, otherwise at the top.
-
-        :return: board layout
-        """
-        self._psg_board = copy.deepcopy(initial_board)
-
-        board_layout = []
-
-        # Loop through the board and create buttons with images
-        for i in range(8):
-            # Row numbers at left of board is blank
-            row = []
-            for j in range(8):
-                piece_image = images[self.psg_board[i][j]]
-                row.append(self.render_square(piece_image, key=(i, j), location=(i, j)))
-            board_layout.append(row)
-
-        if self.board_perspective == chess.WHITE:
-            board_layout = list(reversed(board_layout))  # PySimpleGUI draws from top to bottom, so we need to reverse the order of the rows
-        else:
-            board_layout = [list(reversed(i)) for i in board_layout]
-        return board_layout
 
     def build_main_layout(self):
         """
@@ -1007,8 +697,7 @@ class EasyChessGui:
             if button is None:
                 logging.info(msg='Quit app from main loop, X is pressed.')
                 self.database.close_and_optimise()
-                self.stockfish().engine.close()
-                self.leela().engine.close()
+                self.combined_engines.close()
                 break
 
             if value["review_comment_key"] != self.review_comment:
@@ -1066,12 +755,12 @@ class EasyChessGui:
                             self.play_move(move=window_read_result)
                             self.refresh_stats_tab()
 
-                            engine_move: chess.Move = self.database.engine_move(board=self.board, engine=self.stockfish(), depth_value=23, multipv=1)
+                            engine_move: chess.Move = self.database.engine_move(board=self.board, engine=self.combined_engines.stockfish(), depth_value=23, multipv=1)
                             if engine_move == window_read_result:
                                 puzzle_success()
                                 continue
 
-                            new_eval: float = self.stable_evaluation(min_depth=20, min_nodes=10_000, max_depth=30, max_instability=0.009)
+                            new_eval: float = self.combined_engines.stable_evaluation(min_depth=20, min_nodes=10_000, max_depth=30, max_instability=0.009)
 
                             # Want to move at least 5% towards the best move to consider myself 'improving' (otherwise 'success' can mean going from 99.9% loss to 99.8% when there's a way out)
                             if self.current_puzzle.whose_turn == chess.WHITE:
@@ -1139,7 +828,7 @@ class EasyChessGui:
                                 # Proceed to the next actual position from the game
                                 self.play_move(move=original_next_position.move)
                                 original_move = original_next_position.move
-                                original_game_eval: float = self.stable_evaluation(min_depth=23, min_nodes=5000, max_depth=30, max_instability=0.009, board=original_next_position.board())
+                                original_game_eval: float = self.combined_engines.stable_evaluation(min_depth=23, min_nodes=5000, max_depth=30, max_instability=0.009, board=original_next_position.board())
                                 if self.turn != chess.WHITE:
                                     if new_eval > original_game_eval:
                                         self.highlight_moves(((original_move, red),
@@ -1156,13 +845,13 @@ class EasyChessGui:
                             self.game_node = self.game_node.parent
                             self.review_attempt = 999
 
-                    engine_move: chess.Move = self.database.engine_move(board=self.board, engine=self.stockfish(), depth_value=23, multipv=1)
+                    engine_move: chess.Move = self.database.engine_move(board=self.board, engine=self.combined_engines.stockfish(), depth_value=23, multipv=1)
                     engine_move_position = self.game_node.board().copy()
                     engine_move_position.push(engine_move)
 
-                    current_eval: float = self.stable_evaluation(min_depth=23, min_nodes=5000, max_depth=30, max_instability=0.009)
-                    current_eval_2: float = self.stable_evaluation(min_depth=23, min_nodes=5000, max_depth=30, max_instability=0.009, board=engine_move_position)
-                    new_eval: float = self.stable_evaluation(min_depth=23, min_nodes=5000, max_depth=30, max_instability=0.009, board=this_attempt_next_position)
+                    current_eval: float = self.combined_engines.stable_evaluation(min_depth=23, min_nodes=5000, max_depth=30, max_instability=0.009)
+                    current_eval_2: float = self.combined_engines.stable_evaluation(min_depth=23, min_nodes=5000, max_depth=30, max_instability=0.009, board=engine_move_position)
+                    new_eval: float = self.combined_engines.stable_evaluation(min_depth=23, min_nodes=5000, max_depth=30, max_instability=0.009, board=this_attempt_next_position)
 
                     if engine_move == window_read_result:
                         goal_eval = current_eval
@@ -1172,7 +861,7 @@ class EasyChessGui:
                     if original_next_position is not None:
                         # There is a next move in the game already (either a mainline move or an already explored sub-variation)
                         original_move = original_next_position.move
-                        original_game_eval: float = self.stable_evaluation(min_depth=23, min_nodes=5000, max_depth=30, max_instability=0.009, board=original_next_position.board())
+                        original_game_eval: float = self.combined_engines.stable_evaluation(min_depth=23, min_nodes=5000, max_depth=30, max_instability=0.009, board=original_next_position.board())
 
                         # Want to move at least 5% towards the best move to consider myself 'improving' (otherwise 'success' can mean going from 99.9% loss to 99.8% when there's a way out)
                         if self.turn == chess.WHITE:
@@ -1217,7 +906,7 @@ class EasyChessGui:
 
             if button == "Engine Move":
                 self.puzzle_attempt += 1
-                self.play_move(self.database.engine_move(board=self.board, engine=self.stockfish(), depth_value=20, multipv=1))
+                self.play_move(self.database.engine_move(board=self.board, engine=self.combined_engines.stockfish(), depth_value=20, multipv=1))
                 continue
 
             if button == "Open .pgn":
@@ -1251,8 +940,8 @@ class EasyChessGui:
                 continue
 
             if button == "Build puzzles":
-                self.database.full_engine_evaluation(engine=self.stockfish(), depth_value=18)
-                self.database.full_engine_evaluation(engine=self.leela(), depth_value=1_000)
+                self.database.full_engine_evaluation(engine=self.combined_engines.stockfish(), depth_value=20)
+                self.database.full_engine_evaluation(engine=self.combined_engines.leela(), depth_value=10_000)
                 continue
 
             if button == "Time Controls":
