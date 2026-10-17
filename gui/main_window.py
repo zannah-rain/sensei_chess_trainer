@@ -248,7 +248,15 @@ class MainWindow(QMainWindow):
         self.next_puzzle_button = QtWidgets.QPushButton("Next Puzzle")
         self.next_puzzle_button.clicked.connect(self.next_puzzle)
 
+        # Today's puzzle performance, duplicated from the Today tab since it's
+        # directly relevant here too - kept live by refresh_stats_tab().
+        self.puzzle_today_progress_bar = QtWidgets.QProgressBar()
+        self.puzzle_today_progress_bar.setRange(0, 100)
+        self.puzzle_today_stats_label = QtWidgets.QLabel()
+
         layout.addWidget(self.next_puzzle_button)
+        layout.addWidget(self.puzzle_today_progress_bar)
+        layout.addWidget(self.puzzle_today_stats_label)
 
     def init_next_puzzle_status_bar(self) -> None:
         """A persistent "Selecting puzzle..." indicator, visible while
@@ -320,17 +328,20 @@ class MainWindow(QMainWindow):
 
         progress_percent = max(0, min(100, round(100 * total_eval_improvement_today / daily_eval_improvement_target)))
         self.today_progress_bar.setValue(progress_percent)
+        self.puzzle_today_progress_bar.setValue(progress_percent)
 
         self.today_games_label.setText(dedent(text=f"""\
             Games played: {stats["total_games_played_today"]}
             New puzzles: {stats["total_half_moves_from_real_games_today"] // 2}"""))
-        self.today_puzzles_label.setText(dedent(text=f"""\
+        today_puzzles_text = dedent(text=f"""\
             Puzzles done: {stats["positions_practiced_today"]}
             Average original eval loss: {ifnone(stats["average_real_eval_loss_today"], 0):.3f}
             Average new eval loss: {ifnone(stats["average_practice_eval_loss_today"], 0):.3f}
             Improvement: {(1 - ifnone(stats["average_practice_eval_loss_today"], 0) / max(ifnone(stats["average_real_eval_loss_today"], 0), .0001)) * 100:.1f}%
             Total Improvement vs Target: {total_eval_improvement_today:2f} vs {daily_eval_improvement_target:2f}
-            """))
+            """)
+        self.today_puzzles_label.setText(today_puzzles_text)
+        self.puzzle_today_stats_label.setText(today_puzzles_text)
         self.alltime_games_label.setText(dedent(f"""\
             Total games played: {stats["total_games_played"]}
             Average game length: {ifnone(stats["average_game_halfmoves_alltime"], 0) // 2}
