@@ -1,6 +1,5 @@
 import copy
 from utils.constants import *
-import PySimpleGUI as sg
 import logging
 import sys
 
