@@ -1,5 +1,6 @@
 from typing import Tuple, List
 import copy
+import math
 import random
 import chess
 
@@ -81,11 +82,13 @@ class Board(QDialog):
 
         # Add a button to flip the board
         self.flip_button = QPushButton("Flip")
+        self.flip_button.setObjectName("actionButton")
         self.flip_button.clicked.connect(self.flip)
         self.extra_buttons_bar.addWidget(self.flip_button, 0, 0)
 
         # Add a button to mirror the board
         self.mirror_button = QPushButton("Mirror")
+        self.mirror_button.setObjectName("actionButton")
         self.mirror_button.clicked.connect(self.mirror)
         self.extra_buttons_bar.addWidget(self.mirror_button, 0, 1)
 
@@ -93,20 +96,23 @@ class Board(QDialog):
 
         self._pending_flash_timer = None
         self._pending_move = None
+        self._pending_flash_phase = 0.0
+        self._result_fade_timer = None
 
     def start_pending_highlight(self, move: chess.Move) -> None:
-        """Flashes the move's squares to show its evaluation is in progress."""
+        """Smoothly 'breathes' the move's squares to show its evaluation is in
+        progress - a continuous sine-driven fade rather than a hard on/off blink."""
         self._pending_move = move
         if self._pending_flash_timer is None:
             self._pending_flash_timer = QTimer(self)
-            self._pending_flash_timer.timeout.connect(self._toggle_pending_flash)
-        self._pending_flash_on = False
-        self._toggle_pending_flash()  # show immediately, don't wait for the first interval
-        self._pending_flash_timer.start(350)
+            self._pending_flash_timer.timeout.connect(self._tick_pending_flash)
+        self._pending_flash_phase = 0.0
+        self._tick_pending_flash()  # show immediately, don't wait for the first interval
+        self._pending_flash_timer.start(40)
 
-    def _toggle_pending_flash(self) -> None:
-        self._pending_flash_on = not self._pending_flash_on
-        strength = 0.65 if self._pending_flash_on else 0.2
+    def _tick_pending_flash(self) -> None:
+        self._pending_flash_phase += 0.18
+        strength = 0.425 + 0.225 * math.sin(self._pending_flash_phase)  # breathes between 0.2 and 0.65
         self.highlight_moves(((self._pending_move, pending),), highlight_strength=strength)
 
     def stop_pending_highlight(self) -> None:
@@ -115,6 +121,37 @@ class Board(QDialog):
         if self._pending_flash_timer is not None:
             self._pending_flash_timer.stop()
         self._pending_move = None
+
+    def flash_result(self, move_colour_tuple: tuple, peak_strength: float = 0.75,
+                      hold_ms: int = 300, fade_ms: int = 900) -> None:
+        """
+        Shows a puzzle/review result highlight at full strength briefly, then
+        smoothly fades it out over fade_ms - so a success/fail colour reads as a
+        flash of feedback rather than a highlight that just sits there,
+        unchanged, until the next move happens to overwrite it.
+        """
+        if self._result_fade_timer is not None:
+            self._result_fade_timer.stop()
+
+        self.highlight_moves(move_colour_tuple, highlight_strength=peak_strength)
+
+        timer = QTimer(self)
+        elapsed = {"ms": 0}
+        interval = 40
+
+        def _tick() -> None:
+            elapsed["ms"] += interval
+            fade_elapsed = elapsed["ms"] - hold_ms
+            if fade_elapsed < 0:
+                return
+            progress = min(1.0, fade_elapsed / fade_ms)
+            self.highlight_moves(move_colour_tuple, highlight_strength=peak_strength * (1 - progress))
+            if progress >= 1.0:
+                timer.stop()
+
+        timer.timeout.connect(_tick)
+        timer.start(interval)
+        self._result_fade_timer = timer
 
     def create_board_buttons(self) -> List[List[QGraphicsRectItem]]:
         """

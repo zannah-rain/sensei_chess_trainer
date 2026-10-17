@@ -1446,7 +1446,31 @@ class Database:
         
         if commit:
             self.con.commit()
-        
+
+    def practice_streak(self) -> dict:
+        """
+        Current consecutive-day practice streak: puzzle attempts and review-mode
+        attempts both count (both logged via log_human_move with is_real=False,
+        i.e. real_or_practice=0), so this rewards practice in either mode. The
+        streak counts through today even before today has any practice yet, as
+        long as yesterday was practiced - otherwise it would look broken every
+        morning before the first puzzle of the day.
+        """
+        rows = self.con.execute("""SELECT DISTINCT DATE(timestamp) AS practice_date
+                                   FROM move_attempts
+                                   WHERE player = ? AND real_or_practice = 0""", (username,)).fetchall()
+        practiced_dates = {datetime.date.fromisoformat(row["practice_date"]) for row in rows}
+
+        today = datetime.date.today()
+        practiced_today = today in practiced_dates
+        cursor = today if practiced_today else today - datetime.timedelta(days=1)
+        streak = 0
+        while cursor in practiced_dates:
+            streak += 1
+            cursor -= datetime.timedelta(days=1)
+
+        return {"streak": streak, "practiced_today": practiced_today, "total_days_practiced": len(practiced_dates)}
+
     def log_human_fen(self, board: chess.Board):
         """Should be called ONCE for each FEN seen in a real game."""
 

@@ -62,6 +62,7 @@ class EvaluationWorker(QObject):
     position_info_evaluated = Signal(int, float, float)  # generation, stockfish_eval, leela_eval (unmirrored)
     next_puzzle_selected = Signal(int, object)  # generation, Puzzle - plain Python object, not a Qt type, but
                                                  # PySide6 Signal(object) passes any Python object safely by reference
+    stats_computed = Signal(int, object)  # request_id, stats dict (from the move_stats view)
     failed = Signal(int, str)  # id, message
 
     def __init__(self, database_file: str, stockfish_path: str, leela_path: str) -> None:
@@ -184,6 +185,23 @@ class EvaluationWorker(QObject):
             self.next_puzzle_selected.emit(generation, puzzle)
         except Exception as e:
             self.failed.emit(generation, str(e))
+
+    @Slot(int)
+    def compute_stats(self, request_id: int) -> None:
+        """
+        Queries the move_stats view - a scan/aggregate over every known
+        position's move-attempt history, same flavour of query as
+        highest_priority_puzzle() and similarly too slow (~0.5s) to run on the
+        GUI thread, which is why it lives here rather than in
+        MainWindow.refresh_stats_tab() directly.
+        """
+        try:
+            self._ensure_started()
+            stats = dict(self._database.con.execute("SELECT * FROM move_stats").fetchall()[0])
+            stats.update(self._database.practice_streak())
+            self.stats_computed.emit(request_id, stats)
+        except Exception as e:
+            self.failed.emit(request_id, str(e))
 
     @Slot()
     def shutdown(self) -> None:

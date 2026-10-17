@@ -29,11 +29,12 @@ import PySide6.QtWidgets as QtWidgets
 from PySide6.QtGui import QAction
 from gui.board import Board
 from PySide6.QtMultimedia import QSoundEffect, QMediaPlayer, QAudioOutput
-from PySide6.QtCore import QUrl, Signal, QObject, Qt, QTimer, QThread
+from PySide6.QtCore import QUrl, Signal, QObject, Qt, QTimer, QThread, QPropertyAnimation, QEasingCurve
 from gui.popups import TextboxPopup, TablePopup, DownloadProgressDialog, BuildPuzzlesProgressDialog
 from gui.workers import DownloadGamesWorker, BuildPuzzlesWorker
 from gui.eval_worker import EvaluationWorker
 from gui.position_info_widget import PositionInfoWidget
+from gui.theme import MAIN_STYLESHEET
 
 
 logging.basicConfig(level=logging.INFO)
@@ -82,11 +83,13 @@ class MainWindow(QMainWindow):
     engine_move_requested = Signal(int, str)  # generation, fen
     position_info_requested = Signal(int, str)  # generation, fen
     next_puzzle_requested = Signal(int)  # generation
+    stats_requested = Signal(int)  # request_id
     shutdown_requested = Signal()
 
     def __init__(self) -> None:
         super(MainWindow, self).__init__()
         self.setWindowTitle(f"{APP_NAME} {APP_VERSION}")
+        self.setStyleSheet(MAIN_STYLESHEET)
 
         self.settings = Settings(schema={"Stockfish Executable": "Path",
                                     "Leela Executable": "Path",
@@ -142,18 +145,22 @@ class MainWindow(QMainWindow):
         self.engine_move_requested.connect(self._eval_worker.compute_engine_move)
         self.position_info_requested.connect(self._eval_worker.evaluate_position_info)
         self.next_puzzle_requested.connect(self._eval_worker.select_next_puzzle)
+        self.stats_requested.connect(self._eval_worker.compute_stats)
         self.shutdown_requested.connect(self._eval_worker.shutdown)
         self._eval_worker.puzzle_move_evaluated.connect(self._on_puzzle_move_evaluated)
         self._eval_worker.review_move_evaluated.connect(self._on_review_move_evaluated)
         self._eval_worker.engine_move_ready.connect(self._on_engine_move_ready)
         self._eval_worker.position_info_evaluated.connect(self._on_position_info_evaluated)
         self._eval_worker.next_puzzle_selected.connect(self._on_next_puzzle_selected)
+        self._eval_worker.stats_computed.connect(self._on_stats_computed)
         self._eval_worker.failed.connect(self._on_eval_worker_failed)
         self._eval_thread.start()
+        self._stats_request_id = 0
 
         self._current_puzzle: Puzzle = None
         self._current_puzzle_start_time: datetime.datetime = None
         self.puzzle_attempt = 0
+        self.puzzle_combo = 0  # consecutive first-attempt puzzle successes this session
         self.review_attempt = 0
         self.game_review_mode = False
         self._current_game_review_position_start_time: datetime.datetime = None
@@ -222,13 +229,16 @@ class MainWindow(QMainWindow):
         self.init_console_widget()
 
         self.engine_move_button = QtWidgets.QPushButton("Engine Move")
+        self.engine_move_button.setObjectName("actionButton")
         self.engine_move_button.clicked.connect(self.on_engine_move_clicked)
         vertical_layout_3.addWidget(self.engine_move_button)
 
         nav_layout = QHBoxLayout()
         back_button = QtWidgets.QPushButton("<-")
+        back_button.setObjectName("actionButton")
         back_button.clicked.connect(self.nav_backward)
         forward_button = QtWidgets.QPushButton("->")
+        forward_button.setObjectName("actionButton")
         forward_button.clicked.connect(self.nav_forward)
         nav_layout.addWidget(back_button)
         nav_layout.addWidget(forward_button)
@@ -245,7 +255,21 @@ class MainWindow(QMainWindow):
         """Initialise the puzzle widget."""
         layout = QVBoxLayout(self.puzzle_widget)
 
+        # Streak (consecutive practice days, either mode) and combo (consecutive
+        # first-attempt puzzle successes this session) - gamification, kept live
+        # by refresh_stats_tab()/_set_puzzle_combo().
+        gamification_layout = QHBoxLayout()
+        self.streak_label = QtWidgets.QLabel()
+        self.streak_label.setObjectName("streakLabel")
+        self.combo_label = QtWidgets.QLabel()
+        self.combo_label.setObjectName("comboLabel")
+        gamification_layout.addWidget(self.streak_label)
+        gamification_layout.addWidget(self.combo_label)
+        layout.addLayout(gamification_layout)
+        self._set_puzzle_combo(0)
+
         self.next_puzzle_button = QtWidgets.QPushButton("Next Puzzle")
+        self.next_puzzle_button.setObjectName("actionButton")
         self.next_puzzle_button.clicked.connect(self.next_puzzle)
 
         # Today's puzzle performance, duplicated from the Today tab since it's
@@ -253,6 +277,7 @@ class MainWindow(QMainWindow):
         self.puzzle_today_progress_bar = QtWidgets.QProgressBar()
         self.puzzle_today_progress_bar.setRange(0, 100)
         self.puzzle_today_stats_label = QtWidgets.QLabel()
+        self.puzzle_today_stats_label.setObjectName("statsCard")
 
         layout.addWidget(self.next_puzzle_button)
         layout.addWidget(self.puzzle_today_progress_bar)
@@ -296,10 +321,13 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(self.today_widget)
 
         self.today_games_label = QtWidgets.QLabel()
+        self.today_games_label.setObjectName("statsCard")
         self.today_progress_bar = QtWidgets.QProgressBar()
         self.today_progress_bar.setRange(0, 100)
         self.today_puzzles_label = QtWidgets.QLabel()
+        self.today_puzzles_label.setObjectName("statsCard")
         refresh_button = QtWidgets.QPushButton("Refresh")
+        refresh_button.setObjectName("actionButton")
         refresh_button.clicked.connect(self.refresh_stats_tab)
 
         layout.addWidget(self.today_games_label)
@@ -310,15 +338,66 @@ class MainWindow(QMainWindow):
     def init_alltime_widget(self) -> None:
         layout = QVBoxLayout(self.alltime_widget)
 
+        self.alltime_badges_label = QtWidgets.QLabel()
+        self.alltime_badges_label.setObjectName("badgesLabel")
+        self.alltime_badges_label.setWordWrap(True)
         self.alltime_games_label = QtWidgets.QLabel()
+        self.alltime_games_label.setObjectName("statsCard")
         self.alltime_puzzles_label = QtWidgets.QLabel()
+        self.alltime_puzzles_label.setObjectName("statsCard")
 
+        layout.addWidget(self.alltime_badges_label)
         layout.addWidget(self.alltime_games_label)
         layout.addWidget(self.alltime_puzzles_label)
 
-    def refresh_stats_tab(self) -> None:
-        stats = dict(self.database.con.execute("SELECT * FROM move_stats").fetchall()[0])
+    def _set_puzzle_combo(self, value: int) -> None:
+        self.puzzle_combo = value
+        if value >= 2:
+            self.combo_label.setText(f"⚡ {value} in a row")
+        else:
+            self.combo_label.setText("")
 
+    # Milestone thresholds, smallest first - the badges shown are every
+    # threshold reached so far, not just the highest one, so progress feels
+    # cumulative rather than like earlier milestones were taken away.
+    PUZZLE_MILESTONES = (10, 50, 100, 250, 500, 1000, 2500)
+    STREAK_MILESTONES = (3, 7, 14, 30, 100)
+
+    def _compute_badges(self, stats: dict) -> str:
+        puzzles_done = ifnone(stats.get("total_positions_practiced_alltime"), 0)
+        streak = ifnone(stats.get("streak"), 0)
+
+        badges = [f"🏅 {n} puzzles solved" for n in self.PUZZLE_MILESTONES if puzzles_done >= n]
+        badges += [f"🔥 {n}-day streak" for n in self.STREAK_MILESTONES if streak >= n]
+
+        return "  ".join(badges) if badges else "No badges yet - keep practicing!"
+
+    def refresh_stats_tab(self) -> None:
+        """
+        Triggers an async recompute of the move_stats view (plus the practice
+        streak) on the background EvaluationWorker - this query scans/aggregates
+        every known position's move-attempt history and takes ~0.5s, too slow to
+        run on the GUI thread (it used to, and visibly paused the app every time
+        a puzzle was solved). _on_stats_computed() applies the result once it's
+        ready; this method just fires the request off and returns immediately.
+        """
+        self._stats_request_id += 1
+        self.stats_requested.emit(self._stats_request_id)
+
+    def _animate_progress_bar(self, bar: QtWidgets.QProgressBar, value: int) -> None:
+        animation = QPropertyAnimation(bar, b"value", bar)
+        animation.setDuration(500)
+        animation.setStartValue(bar.value())
+        animation.setEndValue(value)
+        animation.setEasingCurve(QEasingCurve.OutCubic)
+        animation.start()
+
+    def _on_stats_computed(self, request_id: int, stats: dict) -> None:
+        if request_id != self._stats_request_id:
+            return  # superseded by a newer request - discard
+        self._apply_stats(stats)
+
+    def _apply_stats(self, stats: dict) -> None:
         total_eval_improvement_today = stats["sum_real_eval_loss_today"] - stats["sum_practice_eval_loss_today"]
 
         average_eval_loss_per_day = ifnone(stats["this_month_total_real_eval_loss"], 0) / 30
@@ -327,8 +406,14 @@ class MainWindow(QMainWindow):
         daily_eval_improvement_target = 2 * max(average_eval_loss_per_day, average_eval_loss_per_game)
 
         progress_percent = max(0, min(100, round(100 * total_eval_improvement_today / daily_eval_improvement_target)))
-        self.today_progress_bar.setValue(progress_percent)
-        self.puzzle_today_progress_bar.setValue(progress_percent)
+        self._animate_progress_bar(self.today_progress_bar, progress_percent)
+        self._animate_progress_bar(self.puzzle_today_progress_bar, progress_percent)
+
+        if stats["streak"] > 0:
+            streak_text = f"🔥 {stats['streak']}-day streak" + (" (today done)" if stats["practiced_today"] else " (practice today to keep it!)")
+        else:
+            streak_text = "Practice today to start a streak!"
+        self.streak_label.setText(streak_text)
 
         self.today_games_label.setText(dedent(text=f"""\
             Games played: {stats["total_games_played_today"]}
@@ -356,6 +441,7 @@ class MainWindow(QMainWindow):
             Average puzzle original eval loss: {ifnone(stats["average_real_eval_loss_in_practiced_positions"], 0):.3f}
             Average puzzle new eval loss: {ifnone(stats["average_practice_eval_loss_alltime"], 0):.3f}
             Times a practiced positions has occurred in a real game: {stats["times_practiced_positions_seen_in_real_games"]}"""))
+        self.alltime_badges_label.setText(self._compute_badges(stats))
 
     def init_opening_book_widget(self) -> None:
         layout = QVBoxLayout(self.opening_book_widget)
@@ -918,7 +1004,8 @@ class MainWindow(QMainWindow):
                 f"Your Original Eval: {puzzle.latest_real_eval}\n"
                 f"Your Last Try: {puzzle.latest_practice_eval}\n"
                 f"This Try: {new_eval}")
-            self.gui_board.highlight_moves(((move, red),))
+            self.gui_board.flash_result(((move, red),))
+            self._set_puzzle_combo(0)
             self.refresh_stats_tab()
 
         def puzzle_success() -> None:
@@ -926,7 +1013,8 @@ class MainWindow(QMainWindow):
             highlights = [(move, green)]
             if puzzle.latest_attempt_move is not None:
                 highlights.append((puzzle.latest_attempt_move_object, red))
-            self.gui_board.highlight_moves(tuple(highlights))
+            self.gui_board.flash_result(tuple(highlights))
+            self._set_puzzle_combo(self.puzzle_combo + 1)
             self.refresh_stats_tab()
 
         if engine_agreed:
@@ -995,7 +1083,7 @@ class MainWindow(QMainWindow):
                 # If it was the actual next move, we'll find the refutation later!
                 self.play_move(move)
                 self.review_attempt = 0
-            self.gui_board.highlight_moves(((move, red),))
+            self.gui_board.flash_result(((move, red),))
 
         def game_review_success() -> None:
             self.play_sound("sounds\\success-1-6297.mp3")
@@ -1011,9 +1099,9 @@ class MainWindow(QMainWindow):
                     else:
                         worse_for_mover = new_eval < original_game_eval
                     if worse_for_mover:
-                        self.gui_board.highlight_moves(((original_move, red), (move, green)))
+                        self.gui_board.flash_result(((original_move, red), (move, green)))
                     else:
-                        self.gui_board.highlight_moves(((move, green),))
+                        self.gui_board.flash_result(((move, green),))
                 else:
                     self.play_move(move)
             else:
