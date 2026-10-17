@@ -249,7 +249,14 @@ class Board(QDialog):
             self.board_buttons[x][y].highlight = (*colour, highlight_strength)
 
     def clear_highlights(self) -> None:
-        """Resets all squares back to their unhighlighted base colour."""
+        """Resets all squares back to their unhighlighted base colour, and
+        cancels any in-progress pending/result flash animation - otherwise a
+        still-running fade (e.g. from a puzzle result) would repaint these
+        squares a moment later with a stale highlight, possibly on a now-
+        different position (e.g. after a puzzle Retry)."""
+        if self._result_fade_timer is not None:
+            self._result_fade_timer.stop()
+        self.stop_pending_highlight()
         for x in range(8):
             for y in range(8):
                 self.board_buttons[x][y].highlight = (0, 0, 0, 0)

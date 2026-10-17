@@ -12,7 +12,15 @@ from utils.constants import images, QUEENW, ROOKW, BISHOPW, KNIGHTW, QUEENB, ROO
 
 
 class TextboxPopup(QDialog):
-    def __init__(self, title: str, message: str, parent=None) -> None:
+    """
+    A simple message dialog with an OK button, and an optional second button
+    (e.g. "Retry") - exec() returns QDialog.Accepted (1) for OK/close, or 2 if
+    the extra button was clicked, so callers can distinguish the two.
+    """
+
+    EXTRA_BUTTON_RESULT = 2
+
+    def __init__(self, title: str, message: str, extra_button_text: Optional[str] = None, parent=None) -> None:
         super(TextboxPopup, self).__init__(parent)
         self.setWindowTitle(title)
 
@@ -20,9 +28,16 @@ class TextboxPopup(QDialog):
         self.ok_button = QPushButton("OK", self)
         self.ok_button.clicked.connect(self.accept)
 
+        buttons_layout = QHBoxLayout()
+        buttons_layout.addWidget(self.ok_button)
+        if extra_button_text is not None:
+            self.extra_button = QPushButton(extra_button_text, self)
+            self.extra_button.clicked.connect(lambda: self.done(self.EXTRA_BUTTON_RESULT))
+            buttons_layout.addWidget(self.extra_button)
+
         self.layout = QVBoxLayout(self)
         self.layout.addWidget(self.label)
-        self.layout.addWidget(self.ok_button)
+        self.layout.addLayout(buttons_layout)
         self.setLayout(self.layout)
 
 

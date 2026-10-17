@@ -317,6 +317,16 @@ class MainWindow(QMainWindow):
         self.game = chess.pgn.Game().from_board(chess.Board(fen=position_to_fen(puzzle.position)))
         self.game_review_mode = False
 
+    def _retry_puzzle(self, puzzle: Puzzle) -> None:
+        """Resets the board back to this puzzle's starting position for another
+        attempt - used by the "Retry" button on a failed-puzzle popup. Unlike
+        Next Puzzle, perspective/mirroring are left as they are (it's the same
+        puzzle, not a new one) and the puzzle itself isn't re-picked."""
+        self.puzzle_attempt = 0
+        self.current_puzzle = puzzle  # re-set via the property to restart current_puzzle_start_time
+        self.game = chess.pgn.Game().from_board(chess.Board(fen=position_to_fen(puzzle.position)))
+        self.game_review_mode = False
+
     def init_today_widget(self) -> None:
         layout = QVBoxLayout(self.today_widget)
 
@@ -997,16 +1007,19 @@ class MainWindow(QMainWindow):
 
         def puzzle_fail() -> None:
             self.play_sound("sounds\\error-when-entering-the-game-menu-132111.mp3")
-            self.popup_display_text("Puzzle Result",
+            retry_clicked = self.popup_display_text("Puzzle Result",
                 f"Not Quite!\n"
                 f"Best Move Eval: {puzzle.evaluation}\n"
                 f"Goal Eval: {goal_eval}\n"
                 f"Your Original Eval: {puzzle.latest_real_eval}\n"
                 f"Your Last Try: {puzzle.latest_practice_eval}\n"
-                f"This Try: {new_eval}")
+                f"This Try: {new_eval}",
+                extra_button_text="Retry")
             self.gui_board.flash_result(((move, red),))
             self._set_puzzle_combo(0)
             self.refresh_stats_tab()
+            if retry_clicked:
+                self._retry_puzzle(puzzle)
 
         def puzzle_success() -> None:
             self.play_sound("sounds\\success-1-6297.mp3")
@@ -1165,10 +1178,12 @@ class MainWindow(QMainWindow):
         self.game_node = self.game_node.add_variation(move=move)
         return None
     
-    def popup_display_text(self, popup_title: str, text: str) -> None:
-        """Display a pop up window with a message"""
-        popup = TextboxPopup(title=popup_title, message=text)
-        popup.exec()
+    def popup_display_text(self, popup_title: str, text: str, extra_button_text: str = None) -> bool:
+        """Display a pop up window with a message. If extra_button_text is
+        given, a second button is shown alongside OK; returns True if that
+        button was clicked, False if the popup was dismissed via OK/close."""
+        popup = TextboxPopup(title=popup_title, message=text, extra_button_text=extra_button_text)
+        return popup.exec() == TextboxPopup.EXTRA_BUTTON_RESULT
     
     @game_node.setter
     def game_node(self, value: chess.pgn.GameNode):
