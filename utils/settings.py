@@ -43,3 +43,9 @@ class Settings:
     def __setitem__(self, key: str, value):
         self._values[key] = value
         self.save()
+
+    def set_default(self, key: str, value) -> None:
+        """Ensures `key` has a value, without prompting: sets `value` only if the
+        key is currently unset, so callers can read it with __getitem__ right away."""
+        if key not in self._values:
+            self[key] = value

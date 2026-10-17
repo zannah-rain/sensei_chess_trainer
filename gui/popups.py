@@ -4,7 +4,7 @@ import chess
 import pandas as pd
 from PySide6.QtWidgets import (QDialog, QVBoxLayout, QLabel, QPushButton, QFormLayout, QLineEdit,
                                 QCheckBox, QComboBox, QHBoxLayout, QWidget, QDialogButtonBox, QFileDialog,
-                                QTableWidget, QTableWidgetItem, QProgressBar)
+                                QTableWidget, QTableWidgetItem, QProgressBar, QSpinBox)
 from PySide6.QtGui import QIcon, QPixmap
 from PySide6.QtCore import Signal
 
@@ -30,8 +30,9 @@ class SettingsDialog(QDialog):
     """
     Schema-driven settings form, replacing utils.settings.Settings' old PySimpleGUI prompt.
 
-    Mirrors the 4 input kinds the schema supports: "str" -> QLineEdit, "Path" -> QLineEdit
-    with a Browse button, "bool" -> QCheckBox, and a list of options -> QComboBox.
+    Mirrors the input kinds the schema supports: "str" -> QLineEdit, "Path" -> QLineEdit
+    with a Browse button, "bool" -> QCheckBox, "int" -> QSpinBox, and a list of
+    options -> QComboBox.
     """
 
     def __init__(self, schema: dict, values: dict, title: str, parent=None) -> None:
@@ -62,6 +63,15 @@ class SettingsDialog(QDialog):
                 checkbox.setChecked(bool(current))
                 form.addRow(key, checkbox)
                 self._inputs[key] = checkbox
+            elif input_type == "int":
+                spin_box = QSpinBox()
+                spin_box.setRange(0, 10_000_000)
+                try:
+                    spin_box.setValue(int(current))
+                except (TypeError, ValueError):
+                    spin_box.setValue(0)
+                form.addRow(key, spin_box)
+                self._inputs[key] = spin_box
             elif isinstance(input_type, list):
                 combo = QComboBox()
                 combo.addItems(input_type)
@@ -88,6 +98,8 @@ class SettingsDialog(QDialog):
                 out[key] = widget.text()
             elif isinstance(widget, QCheckBox):
                 out[key] = widget.isChecked()
+            elif isinstance(widget, QSpinBox):
+                out[key] = widget.value()
             elif isinstance(widget, QComboBox):
                 out[key] = widget.currentText()
         return out

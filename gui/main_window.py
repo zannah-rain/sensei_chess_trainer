@@ -80,9 +80,15 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(f"{APP_NAME} {APP_VERSION}")
 
         self.settings = Settings(schema={"Stockfish Executable": "Path",
-                                    "Leela Executable": "Path"},
+                                    "Leela Executable": "Path",
+                                    "Stockfish Puzzle Min Depth": "int",
+                                    "Leela Puzzle Min Nodes": "int"},
                             save_file=Path("EasyChessGuiSettings.json"),
                             settings_screen_title="Sensei Settings:")
+        # Sensible out-of-the-box defaults for the two puzzle-eligibility thresholds,
+        # so Build Puzzles works without forcing a settings prompt on first use.
+        self.settings.set_default("Stockfish Puzzle Min Depth", 20)
+        self.settings.set_default("Leela Puzzle Min Nodes", 10_000)
 
         horizontal_layout = QHBoxLayout()
         vertical_layout_1 = QVBoxLayout()
@@ -334,7 +340,8 @@ class MainWindow(QMainWindow):
                       ("Stats", self.show_stats_popup)]),
             ("Lichess", [("Download one lichess .pgn", lambda: self.download_lichess_games(max_new_games=1, title="Downloading 1 game")),
                          ("Download all lichess .pgn's", lambda: self.download_lichess_games(max_new_games=None, title="Downloading games")),
-                         ("Download this positions lichess stats", lambda: self.database._populate_lichess_stats(fen=self.fen))])
+                         ("Download this positions lichess stats", lambda: self.database._populate_lichess_stats(fen=self.fen))]),
+            ("Settings", [("Preferences...", self.open_settings_dialog)])
         ]
         
         for menu_name, actions in menu_data:
@@ -355,6 +362,11 @@ class MainWindow(QMainWindow):
             widget.setVisible(False)
             self.statusBar().addPermanentWidget(widget)
 
+    def open_settings_dialog(self) -> None:
+        """Lets the user review/edit every setting (engine paths, puzzle-eligibility
+        depth/nodes thresholds) at any time, not just when a missing one is first needed."""
+        self.settings.prompt()
+
     def build_puzzles(self) -> None:
         """
         Runs full Stockfish + Leela evaluation coverage in the background (see
@@ -371,6 +383,8 @@ class MainWindow(QMainWindow):
         worker = BuildPuzzlesWorker(database_file=self.database.file,
                                     stockfish_path=self.settings["Stockfish Executable"],
                                     leela_path=self.settings["Leela Executable"],
+                                    stockfish_depth=int(self.settings["Stockfish Puzzle Min Depth"]),
+                                    leela_depth=int(self.settings["Leela Puzzle Min Nodes"]),
                                     parent=self)
         worker.progress.connect(self.on_build_puzzles_progress)
         worker.failed.connect(self.on_build_puzzles_failed)
