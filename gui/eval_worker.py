@@ -60,6 +60,8 @@ class EvaluationWorker(QObject):
     # request_id, engine_agreed, current_eval, current_eval_2, new_eval, has_original_game_eval, original_game_eval
     engine_move_ready = Signal(int, str)  # generation, move_uci
     position_info_evaluated = Signal(int, float, float)  # generation, stockfish_eval, leela_eval (unmirrored)
+    next_puzzle_selected = Signal(int, object)  # generation, Puzzle - plain Python object, not a Qt type, but
+                                                 # PySide6 Signal(object) passes any Python object safely by reference
     failed = Signal(int, str)  # id, message
 
     def __init__(self, database_file: str, stockfish_path: str, leela_path: str) -> None:
@@ -165,6 +167,21 @@ class EvaluationWorker(QObject):
             stockfish_eval = self._combined_engines.stockfish_evaluation(depth=25, board=board)
             leela_eval = self._combined_engines.leela_evaluation(nodes=100_000, board=board)
             self.position_info_evaluated.emit(generation, stockfish_eval, leela_eval)
+        except Exception as e:
+            self.failed.emit(generation, str(e))
+
+    @Slot(int)
+    def select_next_puzzle(self, generation: int) -> None:
+        """
+        Picks the highest-priority due puzzle (Database.highest_priority_puzzle()) -
+        a pure database query, no engine involved, but one that scans/aggregates
+        every known position's move-attempt history and was slow enough to
+        visibly freeze the GUI on "Next Puzzle" before being moved here.
+        """
+        try:
+            self._ensure_started()
+            puzzle = self._database.highest_priority_puzzle()
+            self.next_puzzle_selected.emit(generation, puzzle)
         except Exception as e:
             self.failed.emit(generation, str(e))
 

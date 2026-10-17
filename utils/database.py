@@ -662,9 +662,15 @@ class Database:
         if target_eval_loss is None:
             target_eval_loss = dict(self.con.execute("SELECT * FROM move_stats").fetchall()[0])["average_real_eval_loss_alltime"] / 2
         
-        move_attempts = self.con.execute("""SELECT * 
+        # Only position/timestamp/latest_real_eval_loss are used below - all three are
+        # already available straight from move_attempt_analysis_stage_0, without that
+        # view's expensive power()-based priority/multiplier columns (irrelevant here)
+        # or the full move_attempt_analysis view's sort (also irrelevant: this query's
+        # own ORDER BY, right below, is by timestamp, not priority).
+        move_attempts = self.con.execute("""SELECT ma.position AS position, ma.timestamp AS timestamp,
+                                                    stage0.latest_real_eval_loss AS latest_real_eval_loss
                                             FROM my_move_attempts ma
-                                            INNER JOIN move_attempt_analysis maa ON ma.position = maa.position""").fetchall()
+                                            INNER JOIN move_attempt_analysis_stage_0 stage0 ON ma.position = stage0.position""").fetchall()
         move_attempts = [dict(i) for i in move_attempts]
         move_attempts = sorted(move_attempts, key=lambda x: x["timestamp"])
         schedule = dict()
@@ -878,7 +884,14 @@ class Database:
         import math
         self.con.create_function("power", 2, math.pow)
         
-        self.con.execute(f"""CREATE TEMP VIEW move_attempt_analysis AS
+        # Unordered first: the ORDER BY below is pure overhead for any caller that's
+        # going to filter, aggregate, or re-sort anyway (highest_priority_puzzle()
+        # re-sorts by its own reweighted priority; the move_stats/todays_practice_moves
+        # aggregates don't care about row order at all) - those query this view
+        # directly. move_attempt_analysis itself (below) is kept, unchanged in every
+        # other respect, for the one caller (the Puzzles data popup) that wants the
+        # default "biggest priority first" order via a plain LIMIT.
+        self.con.execute(f"""CREATE TEMP VIEW move_attempt_analysis_unordered AS
                              SELECT
                                 *,
                                 latest_real_eval_loss + latest_practice_eval_loss + 0.02 AS eval_loss_multiplier,
@@ -887,9 +900,11 @@ class Database:
                                 1 / (CAST(times_practiced AS FLOAT) + 1) AS times_practiced_multiplier,
                                 days_since_last_practiced + 1 AS days_since_practiced_multiplier,
                                 1 / power(days_since_last_seen + 1, 1.5) AS days_since_seen_multiplier,
-                                (latest_real_eval_loss + 0.02) * (latest_practice_eval_loss + 0.02) * (MIN(latest_real_time_taken_seconds, 90) + MIN(latest_practice_time_taken_seconds, 90) + 10) * (1 / power(CAST(times_practiced AS FLOAT) + 1, 0.5)) * (power(days_since_last_practiced + 1, 1) + 1) * (1 / power(days_since_last_seen + 1, 2)) AS priority --  * (power(times_seen_in_real_games + 1, 0.5))
-                             FROM move_attempt_analysis_stage_0
-                             ORDER BY priority DESC""")
+                                (latest_real_eval_loss + 0.02) * (latest_practice_eval_loss + 0.02) * (MIN(latest_real_time_taken_seconds, 90) + MIN(latest_practice_time_taken_seconds, 90) + 10) * (1 / power(CAST(times_practiced AS FLOAT) + 1, 0.5)) * (days_since_last_practiced + 2) * (1 / ((days_since_last_seen + 1) * (days_since_last_seen + 1))) AS priority --  * (power(times_seen_in_real_games + 1, 0.5))
+                             FROM move_attempt_analysis_stage_0""")
+
+        self.con.execute("""CREATE TEMP VIEW move_attempt_analysis AS
+                            SELECT * FROM move_attempt_analysis_unordered ORDER BY priority DESC""")
         
         # Want to know:
         # Stats about practice done today and this week
@@ -911,17 +926,17 @@ class Database:
                     AVG(latest_real_time_taken_seconds) AS average_time_per_move_real,
                     AVG(latest_practice_time_taken_seconds) AS average_time_per_move_practice,
                     SUM(priority) AS total_re_review_priority
-                FROM move_attempt_analysis
+                FROM move_attempt_analysis_unordered
                 WHERE days_since_last_practiced <= 1
                 AND last_practiced_timestamp != last_seen_in_real_game
             ),
             this_month_performance_stats AS (
-                SELECT 
+                SELECT
                     1 AS indxx,
                     COUNT(*) AS positions_played,
                     AVG(latest_real_eval_loss) AS average_real_eval_loss,
                     SUM(latest_real_eval_loss) AS total_real_eval_loss
-                FROM move_attempt_analysis
+                FROM move_attempt_analysis_unordered
                 WHERE days_since_last_seen <= 30
             ),
             todays_game_stats AS (
@@ -952,11 +967,11 @@ class Database:
                     AVG(latest_real_time_taken_seconds) AS average_time_per_move_real,
                     AVG(latest_practice_time_taken_seconds) AS average_time_per_move_practice,
                     SUM(priority) AS total_re_review_priority
-                FROM move_attempt_analysis
+                FROM move_attempt_analysis_unordered
                 WHERE last_practiced_timestamp != last_seen_in_real_game
             ),
             overall_real_stats AS (
-                SELECT 
+                SELECT
                     1 AS indxx,
                     COUNT(*) AS positions_played,
                     AVG(latest_real_eval_loss) AS average_real_eval_loss,
@@ -964,7 +979,7 @@ class Database:
                     SUM(times_seen_in_real_games) as times_real_positions_seen_in_real_games,
                     AVG(latest_real_time_taken_seconds) AS average_time_per_move_real,
                     SUM(priority) AS total_review_priority
-                FROM move_attempt_analysis
+                FROM move_attempt_analysis_unordered
             )
             SELECT
                 IFNULL(todays_practice_stats.positions_practiced, 0) AS positions_practiced_today,
@@ -1081,7 +1096,10 @@ class Database:
 
     def highest_priority_puzzle(self) -> Puzzle:
         schedule = self.spaced_repetition_move_schedule()
-        all_puzzles = [dict(i) for i in self.con.execute("SELECT * FROM move_attempt_analysis").fetchall()]
+        # move_attempt_analysis's own ORDER BY priority DESC is pure overhead here -
+        # every row gets its priority reweighted (below) and the whole list re-sorted
+        # anyway, so there's no reason to also sort the ~unreweighted~ priority first.
+        all_puzzles = [dict(i) for i in self.con.execute("SELECT * FROM move_attempt_analysis_unordered").fetchall()]
         scheduled_puzzles = list()
 
         for i in all_puzzles:

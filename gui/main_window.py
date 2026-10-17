@@ -81,6 +81,7 @@ class MainWindow(QMainWindow):
     review_move_requested = Signal(int, str, str, str)  # request_id, pre_move_fen, move_uci, original_next_fen
     engine_move_requested = Signal(int, str)  # generation, fen
     position_info_requested = Signal(int, str)  # generation, fen
+    next_puzzle_requested = Signal(int)  # generation
     shutdown_requested = Signal()
 
     def __init__(self) -> None:
@@ -137,11 +138,13 @@ class MainWindow(QMainWindow):
         self.review_move_requested.connect(self._eval_worker.evaluate_review_move)
         self.engine_move_requested.connect(self._eval_worker.compute_engine_move)
         self.position_info_requested.connect(self._eval_worker.evaluate_position_info)
+        self.next_puzzle_requested.connect(self._eval_worker.select_next_puzzle)
         self.shutdown_requested.connect(self._eval_worker.shutdown)
         self._eval_worker.puzzle_move_evaluated.connect(self._on_puzzle_move_evaluated)
         self._eval_worker.review_move_evaluated.connect(self._on_review_move_evaluated)
         self._eval_worker.engine_move_ready.connect(self._on_engine_move_ready)
         self._eval_worker.position_info_evaluated.connect(self._on_position_info_evaluated)
+        self._eval_worker.next_puzzle_selected.connect(self._on_next_puzzle_selected)
         self._eval_worker.failed.connect(self._on_eval_worker_failed)
         self._eval_thread.start()
 
@@ -167,6 +170,7 @@ class MainWindow(QMainWindow):
         self._build_puzzles_dialog: BuildPuzzlesProgressDialog = None
         self._build_puzzles_failure: str = None
         self.init_build_puzzles_status_bar()
+        self.init_next_puzzle_status_bar()
 
         self._game = chess.pgn.Game()
         self._game_node = self.game
@@ -237,17 +241,44 @@ class MainWindow(QMainWindow):
     def init_puzzle_widget(self) -> None:
         """Initialise the puzzle widget."""
         layout = QVBoxLayout(self.puzzle_widget)
-        
-        next_puzzle_button = QtWidgets.QPushButton("Next Puzzle")
-        next_puzzle_button.clicked.connect(self.next_puzzle)
 
-        layout.addWidget(next_puzzle_button)
+        self.next_puzzle_button = QtWidgets.QPushButton("Next Puzzle")
+        self.next_puzzle_button.clicked.connect(self.next_puzzle)
+
+        layout.addWidget(self.next_puzzle_button)
+
+    def init_next_puzzle_status_bar(self) -> None:
+        """A persistent "Selecting puzzle..." indicator, visible while
+        highest_priority_puzzle() is being computed in the background - it scans
+        every known position's move-attempt history and can take a couple of
+        seconds, which used to freeze the whole app with no feedback at all."""
+        self.next_puzzle_status_label = QtWidgets.QLabel("Selecting puzzle…")
+        self.next_puzzle_progress_bar = QtWidgets.QProgressBar()
+        self.next_puzzle_progress_bar.setRange(0, 0)  # indeterminate - this is one query, not a multi-step process
+        self.next_puzzle_progress_bar.setMaximumWidth(120)
+
+        for widget in (self.next_puzzle_status_label, self.next_puzzle_progress_bar):
+            widget.setVisible(False)
+            self.statusBar().addPermanentWidget(widget)
 
     def next_puzzle(self) -> None:
-        self.current_puzzle = self.database.highest_priority_puzzle()
+        self.next_puzzle_button.setEnabled(False)
+        self.next_puzzle_status_label.setVisible(True)
+        self.next_puzzle_progress_bar.setVisible(True)
+        generation = self._eval_generation
+        self.next_puzzle_requested.emit(generation)
+
+    def _on_next_puzzle_selected(self, generation: int, puzzle: Puzzle) -> None:
+        self.next_puzzle_button.setEnabled(True)
+        self.next_puzzle_status_label.setVisible(False)
+        self.next_puzzle_progress_bar.setVisible(False)
+        if generation != self._eval_generation:
+            return  # the board moved on while this was being computed - discard
+
+        self.current_puzzle = puzzle
         # Randomise perspective to hopefully help learning
         self.gui_board.randomise_perspective_and_mirroring()
-        self.game = chess.pgn.Game().from_board(chess.Board(fen=position_to_fen(self.current_puzzle.position)))
+        self.game = chess.pgn.Game().from_board(chess.Board(fen=position_to_fen(puzzle.position)))
         self.game_review_mode = False
 
     def init_today_widget(self) -> None:
@@ -1017,6 +1048,9 @@ class MainWindow(QMainWindow):
         print(f"Background evaluation failed: {message}")
         self.gui_board.stop_pending_highlight()
         self.engine_move_button.setEnabled(True)
+        self.next_puzzle_button.setEnabled(True)
+        self.next_puzzle_status_label.setVisible(False)
+        self.next_puzzle_progress_bar.setVisible(False)
 
     def play_move(self, move: Move):
         """Update the current board state with the given move, highlighting what's changed."""
