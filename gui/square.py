@@ -9,12 +9,16 @@ Squares have a minimum size, and can be resized to fit the board.
 
 from utils.constants import *
 import utils.colours
-from PySide6.QtWidgets import QPushButton
-from PySide6.QtCore import Signal
+from PySide6.QtWidgets import QPushButton, QSizePolicy
+from PySide6.QtCore import Signal, QSize
 import PySide6
 from typing import Tuple
 
 import utils.square
+
+# How much of the square's own size the piece icon fills, leaving a small margin
+# around the edge rather than touching the border exactly.
+ICON_SIZE_FRACTION = 0.85
 
 
 class Square(QPushButton):
@@ -28,13 +32,20 @@ class Square(QPushButton):
         super(Square, self).__init__(parent)
         self.x = x
         self.y = y
-        self.setMinimumSize(25, 25)
+        self.setMinimumSize(20, 20)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
         self._color = (0, 0, 0)
         self._highlight = (0, 0, 0, 0)
 
         self.clicked.connect(self.button_clicked)
         self.clicked.connect(lambda: self.square_clicked.emit(self.x, self.y))
+
+    def resizeEvent(self, event) -> None:
+        """Keeps the piece icon scaled proportionally to the square as it resizes."""
+        super().resizeEvent(event)
+        side = int(min(self.width(), self.height()) * ICON_SIZE_FRACTION)
+        self.setIconSize(QSize(side, side))
 
     def set_color(self, color: Tuple[int, int, int]) -> None:
         """Sets the colour of the square."""

@@ -9,10 +9,32 @@ import gui.square
 from utils.constants import *
 from gui.popups import PromotionPickerDialog
 
-from PySide6.QtWidgets import QPushButton, QDialog, QGridLayout, QGraphicsRectItem, QVBoxLayout, QLabel, QFrame
+from PySide6.QtWidgets import QPushButton, QDialog, QGridLayout, QGraphicsRectItem, QVBoxLayout, QLabel, QFrame, QSizePolicy
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QPixmap
 from PySide6.QtCore import Signal, Slot
+
+
+class SquareGridFrame(QFrame):
+    """
+    A QFrame that keeps a centered, square-shaped region for its grid layout.
+
+    Without this, resizing the frame to a non-square shape (e.g. a wide, short
+    window) would stretch each cell of an 8x8 grid into a non-square rectangle.
+    Instead, this pads whichever dimension is larger with margins so the grid
+    itself always renders as a square, centered within the frame.
+    """
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        layout = self.layout()
+        if layout is None:
+            return
+        side = min(self.width(), self.height())
+        horizontal_margin = max(0, (self.width() - side) // 2)
+        vertical_margin = max(0, (self.height() - side) // 2)
+        layout.setContentsMargins(horizontal_margin, vertical_margin, horizontal_margin, vertical_margin)
+
 
 class Board(QDialog):
     """
@@ -31,17 +53,23 @@ class Board(QDialog):
         self.perspective = chess.WHITE
         self._board: chess.Board = board
 
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+
         self.sub_layout = QVBoxLayout(self)
-        
+
         self.player_label = QLabel("{0} to play".format("White" if self.perspective == chess.WHITE else "Black"), self)
         self.sub_layout.addWidget(self.player_label, alignment=Qt.AlignCenter)
 
-        self.board_frame = QFrame(self)
-        self.sub_layout.addWidget(self.board_frame)
+        self.board_frame = SquareGridFrame(self)
+        self.board_frame.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.sub_layout.addWidget(self.board_frame, 1)  # stretch=1: board grows first, label/buttons stay their natural size
         self.board_frame.setFrameStyle(QFrame.Panel | QFrame.Raised)
 
         self.board_layout = QGridLayout()
         self.board_layout.setSpacing(0)
+        for i in range(8):
+            self.board_layout.setRowStretch(i, 1)
+            self.board_layout.setColumnStretch(i, 1)
         self.board_frame.setLayout(self.board_layout)
 
         self.board_buttons = self.create_board_buttons()
