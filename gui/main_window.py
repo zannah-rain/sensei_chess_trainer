@@ -919,6 +919,7 @@ class MainWindow(QMainWindow):
                 f"Your Last Try: {puzzle.latest_practice_eval}\n"
                 f"This Try: {new_eval}")
             self.gui_board.highlight_moves(((move, red),))
+            self.refresh_stats_tab()
 
         def puzzle_success() -> None:
             self.play_sound("sounds\\success-1-6297.mp3")
@@ -926,6 +927,7 @@ class MainWindow(QMainWindow):
             if puzzle.latest_attempt_move is not None:
                 highlights.append((puzzle.latest_attempt_move_object, red))
             self.gui_board.highlight_moves(tuple(highlights))
+            self.refresh_stats_tab()
 
         if engine_agreed:
             puzzle_success()
