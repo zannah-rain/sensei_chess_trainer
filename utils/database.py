@@ -32,8 +32,9 @@ logging.basicConfig(level=logging.INFO)
 
 class Database:
     """Wrapper for stuff I want to keep track of that's gotten too complicated to just save in loads of .json files."""
-    def __init__(self, 
+    def __init__(self,
                  file="chess_database.db"):
+        self.file = file
         self.con = sqlite3.connect(database=file)
         self.con.row_factory = sqlite3.Row
         self.con.executescript("""PRAGMA journal_mode = wal;  -- Faster writes
@@ -1417,14 +1418,18 @@ class Database:
 
         return True
     
-    def download_latest_games(self, max_new_games: int = None):
+    def download_latest_games(self, max_new_games: int = None, progress_callback=None):
+        """
+        :param progress_callback: if given, called with the running count of games
+            added so far after each one (e.g. to drive a progress bar).
+        """
         new_pgns = lichess_client.games.export_by_player(username=username,
                                                          as_pgn=True,
                                                          since=self.latest_game_timestamp,
                                                          rated=True,
                                                          finished=True,
                                                          sort="dateAsc")
-        
+
         games_added = 0
         try:
             for i in new_pgns:
@@ -1432,6 +1437,8 @@ class Database:
                 success = self.add_game(this_new_game)
                 if success:
                     games_added += 1
+                    if progress_callback is not None:
+                        progress_callback(games_added)
                     if max_new_games is not None:
                         if games_added >= max_new_games:
                             break

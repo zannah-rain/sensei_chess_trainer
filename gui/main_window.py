@@ -31,7 +31,8 @@ from PySide6.QtGui import QAction
 from gui.board import Board
 from PySide6.QtMultimedia import QSoundEffect, QMediaPlayer, QAudioOutput
 from PySide6.QtCore import QUrl, Signal, QObject, Qt
-from gui.popups import TextboxPopup, TablePopup
+from gui.popups import TextboxPopup, TablePopup, DownloadProgressDialog
+from gui.workers import DownloadGamesWorker
 from gui.position_info_widget import PositionInfoWidget
 
 
@@ -328,8 +329,8 @@ class MainWindow(QMainWindow):
                       ("Showcase Games", self.show_showcase_games_popup),
                       ("Puzzles", self.show_puzzles_popup),
                       ("Stats", self.show_stats_popup)]),
-            ("Lichess", [("Download one lichess .pgn", lambda: self.database.download_latest_games(max_new_games=1)),
-                         ("Download all lichess .pgn's", lambda: self.database.download_latest_games(max_new_games=None)),
+            ("Lichess", [("Download one lichess .pgn", lambda: self.download_lichess_games(max_new_games=1, title="Downloading 1 game")),
+                         ("Download all lichess .pgn's", lambda: self.download_lichess_games(max_new_games=None, title="Downloading games")),
                          ("Download this positions lichess stats", lambda: self.database._populate_lichess_stats(fen=self.fen))])
         ]
         
@@ -341,7 +342,35 @@ class MainWindow(QMainWindow):
     def build_puzzles(self) -> None:
         self.database.full_engine_evaluation(engine=self.combined_engines.stockfish(), depth_value=12)
         self.database.full_engine_evaluation(engine=self.combined_engines.leela(), depth_value=100)
-    
+
+    def download_lichess_games(self, max_new_games, title: str) -> None:
+        """
+        Downloads games from Lichess on a background thread (so the GUI stays
+        responsive) behind a visible progress dialog: a filling bar when the
+        target count is known (downloading a fixed number of games), or a
+        busy/marquee bar with a running tally otherwise (Lichess streams games
+        one at a time with no upfront total when downloading "all" of them).
+        """
+        dialog = DownloadProgressDialog(title=title, maximum=max_new_games, parent=self)
+        worker = DownloadGamesWorker(database_file=self.database.file, max_new_games=max_new_games, parent=self)
+        worker.progress.connect(dialog.update_progress)
+
+        failure = {"happened": False}
+
+        def on_failed(message: str) -> None:
+            failure["happened"] = True
+            dialog.show_failure(message)
+
+        def on_finished() -> None:
+            if not failure["happened"]:
+                dialog.accept()
+            self.refresh_stats_tab()
+
+        worker.failed.connect(on_failed)
+        worker.finished.connect(on_finished)
+        worker.start()
+        dialog.exec()
+
     def file_picker(self, prompt) -> Path:
         dialog = QFileDialog()
         dialog.setFileMode(QFileDialog.ExistingFile)

@@ -4,7 +4,7 @@ import chess
 import pandas as pd
 from PySide6.QtWidgets import (QDialog, QVBoxLayout, QLabel, QPushButton, QFormLayout, QLineEdit,
                                 QCheckBox, QComboBox, QHBoxLayout, QWidget, QDialogButtonBox, QFileDialog,
-                                QTableWidget, QTableWidgetItem)
+                                QTableWidget, QTableWidgetItem, QProgressBar)
 from PySide6.QtGui import QIcon, QPixmap
 
 from utils.constants import images, QUEENW, ROOKW, BISHOPW, KNIGHTW, QUEENB, ROOKB, BISHOPB, KNIGHTB
@@ -166,3 +166,38 @@ class TablePopup(QDialog):
     def _row_double_clicked(self, row: int, _column: int) -> None:
         self._on_row_picked(self._dataframe.iloc[row])
         self.accept()
+
+
+class DownloadProgressDialog(QDialog):
+    """
+    A progress bar shown while games download in the background.
+
+    Determinate (a filling bar, 0 up to `maximum`) when the number of games to
+    download is known ahead of time; indeterminate (a busy/marquee bar) when it
+    isn't - Lichess streams games one at a time with no upfront total count, so
+    "download all" can only show a running tally, not a percentage.
+    """
+
+    def __init__(self, title: str, maximum: int = None, parent=None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        self.setModal(True)
+
+        self.status_label = QLabel("Starting download…")
+        self.progress_bar = QProgressBar()
+        if maximum is not None:
+            self.progress_bar.setRange(0, maximum)
+        else:
+            self.progress_bar.setRange(0, 0)  # indeterminate
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(self.status_label)
+        layout.addWidget(self.progress_bar)
+
+    def update_progress(self, games_added: int) -> None:
+        if self.progress_bar.maximum() > 0:
+            self.progress_bar.setValue(games_added)
+        self.status_label.setText(f"{games_added} game{'s' if games_added != 1 else ''} downloaded…")
+
+    def show_failure(self, message: str) -> None:
+        self.status_label.setText(f"Download failed: {message}")
