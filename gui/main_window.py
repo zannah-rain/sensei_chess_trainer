@@ -120,8 +120,6 @@ class MainWindow(QMainWindow):
         self.audio_output = QAudioOutput(self)
         self.audio_player.setAudioOutput(self.audio_output)
 
-        self.popup_display_text("Welcome", f"Welcome to {APP_NAME} {APP_VERSION}!")
-
         self.position_info_widget = PositionInfoWidget(database=self.database)
         vertical_layout_2.addWidget(self.position_info_widget)
 
