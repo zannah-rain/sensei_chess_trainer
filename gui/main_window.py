@@ -91,6 +91,12 @@ class MainWindow(QMainWindow):
         super(MainWindow, self).__init__()
         self.setWindowTitle(f"{APP_NAME} {APP_VERSION}")
         self.setStyleSheet(MAIN_STYLESHEET)
+        # With no explicit size, Qt falls back to a compact sizeHint-based
+        # window where the (square, width-constrained) board column ends up
+        # much taller than it is wide - leaving the board small and the extra
+        # vertical space stuck below it. A wider default gives the board
+        # enough width to actually use the window's height too.
+        self.resize(1300, 850)
 
         self.settings = Settings(schema={"Stockfish Executable": "Path",
                                     "Leela Executable": "Path",
@@ -116,14 +122,27 @@ class MainWindow(QMainWindow):
         vertical_layout_1 = QVBoxLayout()
         vertical_layout_2 = QVBoxLayout()
         vertical_layout_3 = QVBoxLayout()
-        horizontal_layout.addLayout(vertical_layout_1)
         horizontal_layout.addLayout(vertical_layout_2)
+        horizontal_layout.addLayout(vertical_layout_1)
         horizontal_layout.addLayout(vertical_layout_3)
+
+        # The turn label + board are kept as a single compact block, centered
+        # as a unit in the column via symmetric stretch on either side. This
+        # only looks right because _sync_board_size() (called from
+        # resizeEvent) actively keeps Board's own height matched to its width
+        # - without that, Board's Expanding size policy would claim all
+        # leftover space for itself, leaving the label stranded far above it.
+        vertical_layout_1.addStretch(1)
+        self.turn_label = QtWidgets.QLabel()
+        self.turn_label.setObjectName("turnLabel")
+        self.turn_label.setAlignment(Qt.AlignCenter)
+        vertical_layout_1.addWidget(self.turn_label)
 
         self.gui_board = Board()
         self.gui_board.move_signal.connect(self.on_board_move)
         self.gui_board.mirror_changed.connect(self._refresh_mirror_dependent_display)
         vertical_layout_1.addWidget(self.gui_board)
+        vertical_layout_1.addStretch(1)
 
         self.init_menu()
 
@@ -209,9 +228,6 @@ class MainWindow(QMainWindow):
         layout_widget = QWidget()
         layout_widget.setLayout(horizontal_layout)
         self.setCentralWidget(layout_widget)
-
-        self.turn_label = QtWidgets.QLabel()
-        vertical_layout_3.addWidget(self.turn_label)
 
         tab_widget = QtWidgets.QTabWidget()
         vertical_layout_3.addWidget(tab_widget)
@@ -560,6 +576,7 @@ class MainWindow(QMainWindow):
         self.shutdown_requested.emit()
         self._eval_thread.wait()
         super().closeEvent(event)
+
 
     def init_menu(self) -> None:
         self.menu = self.menuBar()

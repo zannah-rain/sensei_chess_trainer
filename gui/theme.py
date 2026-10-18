@@ -34,6 +34,12 @@ QLabel#statsCard {{
     padding: 8px 12px;
 }}
 
+QLabel#turnLabel {{
+    font-weight: bold;
+    font-size: 15px;
+    padding: 4px 0px;
+}}
+
 QLabel#streakLabel {{
     color: {ACCENT_BRIGHT};
     font-weight: 600;

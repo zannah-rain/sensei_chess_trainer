@@ -23,7 +23,9 @@ class SquareGridFrame(QFrame):
     Without this, resizing the frame to a non-square shape (e.g. a wide, short
     window) would stretch each cell of an 8x8 grid into a non-square rectangle.
     Instead, this pads whichever dimension is larger with margins so the grid
-    itself always renders as a square, centered within the frame.
+    itself always renders as a square, centered within the frame. (MainWindow
+    keeps Board's own outer size matching its width - see _sync_board_size -
+    so in practice this frame is rarely given more height than it needs.)
     """
 
     def resizeEvent(self, event) -> None:
@@ -98,6 +100,32 @@ class Board(QDialog):
         self._pending_move = None
         self._pending_flash_phase = 0.0
         self._result_fade_timer = None
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._sync_own_height()
+
+    def _sync_own_height(self) -> None:
+        """
+        Keeps this widget's own height matched to its width (a square board
+        plus the Flip/Mirror button row), so it never claims more vertical
+        space than it can actually use - if it did, an Expanding size policy
+        would make it swallow all leftover space in its layout column with
+        nothing to show for it (SquareGridFrame would just pad the unused
+        remainder around the grid, and the buttons would end up stranded far
+        below the board). Reacting to this widget's own resizeEvent (rather
+        than e.g. MainWindow's) matters because setFixedHeight() below
+        typically changes how much *width* this column gets on the next
+        layout pass too - that's a resize of this widget, not of the window,
+        so only a self-contained resizeEvent reliably sees it and re-settles
+        (the `!=` check stops it from recursing forever once it has).
+        """
+        button_row_height = self.flip_button.sizeHint().height()
+        margins = self.sub_layout.contentsMargins()
+        target_height = (self.width() + button_row_height + self.sub_layout.spacing()
+                         + margins.top() + margins.bottom())
+        if target_height > 0 and self.height() != target_height:
+            self.setFixedHeight(target_height)
 
     def start_pending_highlight(self, move: chess.Move) -> None:
         """Smoothly 'breathes' the move's squares to show its evaluation is in
