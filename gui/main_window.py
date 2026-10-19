@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Dict
 from utils.database import Database, position_to_fen
 from utils.settings import Settings
+from utils.board_themes import BOARD_THEME_NAMES, DEFAULT_BOARD_THEME
 from globals import username
 import datetime
 import pandas as pd
@@ -26,7 +27,7 @@ from utils.square import Square
 from utils.move import Move
 from PySide6.QtWidgets import QMainWindow, QVBoxLayout, QFileDialog, QVBoxLayout, QHBoxLayout, QWidget
 import PySide6.QtWidgets as QtWidgets
-from PySide6.QtGui import QAction
+from PySide6.QtGui import QAction, QActionGroup
 from gui.board import Board
 from PySide6.QtMultimedia import QSoundEffect, QMediaPlayer, QAudioOutput
 from PySide6.QtCore import QUrl, Signal, QObject, Qt, QTimer, QThread, QPropertyAnimation, QEasingCurve
@@ -103,7 +104,8 @@ class MainWindow(QMainWindow):
                                     "Stockfish Puzzle Quick Scan Depth": "int",
                                     "Leela Puzzle Quick Scan Nodes": "int",
                                     "Stockfish Puzzle Refine Depth": "int",
-                                    "Leela Puzzle Refine Nodes": "int"},
+                                    "Leela Puzzle Refine Nodes": "int",
+                                    "Board Theme": BOARD_THEME_NAMES},
                             save_file=Path("EasyChessGuiSettings.json"),
                             settings_screen_title="Sensei Settings:")
         # Sensible out-of-the-box defaults for Build Puzzles' two-stage evaluation
@@ -117,6 +119,7 @@ class MainWindow(QMainWindow):
         self.settings.set_default("Leela Puzzle Quick Scan Nodes", 1_000)
         self.settings.set_default("Stockfish Puzzle Refine Depth", 20)
         self.settings.set_default("Leela Puzzle Refine Nodes", 10_000)
+        self.settings.set_default("Board Theme", DEFAULT_BOARD_THEME)
 
         horizontal_layout = QHBoxLayout()
         vertical_layout_1 = QVBoxLayout()
@@ -128,17 +131,17 @@ class MainWindow(QMainWindow):
 
         # The turn label + board are kept as a single compact block, centered
         # as a unit in the column via symmetric stretch on either side. This
-        # only looks right because _sync_board_size() (called from
-        # resizeEvent) actively keeps Board's own height matched to its width
-        # - without that, Board's Expanding size policy would claim all
-        # leftover space for itself, leaving the label stranded far above it.
+        # only looks right because Board._sync_own_height() (board.py, called
+        # from Board's own resizeEvent) actively keeps its height matched to
+        # its width - without that, Board's Expanding size policy would claim
+        # all leftover space for itself, leaving the label stranded above it.
         vertical_layout_1.addStretch(1)
         self.turn_label = QtWidgets.QLabel()
         self.turn_label.setObjectName("turnLabel")
         self.turn_label.setAlignment(Qt.AlignCenter)
         vertical_layout_1.addWidget(self.turn_label)
 
-        self.gui_board = Board()
+        self.gui_board = Board(theme=self.settings["Board Theme"])
         self.gui_board.move_signal.connect(self.on_board_move)
         self.gui_board.mirror_changed.connect(self._refresh_mirror_dependent_display)
         vertical_layout_1.addWidget(self.gui_board)
@@ -608,6 +611,29 @@ class MainWindow(QMainWindow):
             menu = self.menu.addMenu(menu_name)
             for action_name, callback in actions:
                 add_menu_action(menu, action_name, callback)
+            if menu_name == "Board":
+                self._init_board_theme_menu(menu)
+
+    def _init_board_theme_menu(self, board_menu) -> None:
+        """A checkable "Theme" submenu under Board, for quickly switching the
+        board's light/dark square colours without opening the full Settings
+        dialog. Mirrors whatever's chosen back into Settings so it persists
+        and stays in sync with the Settings dialog's own "Board Theme" field."""
+        theme_menu = board_menu.addMenu("Theme")
+        theme_group = QActionGroup(self)
+        theme_group.setExclusive(True)
+        current_theme = self.settings["Board Theme"]
+
+        def select_theme(name: str) -> None:
+            self.settings["Board Theme"] = name
+            self.gui_board.set_theme(name)
+
+        for name in BOARD_THEME_NAMES:
+            action = QAction(name, self, checkable=True)
+            action.setChecked(name == current_theme)
+            action.triggered.connect(lambda _checked=False, n=name: select_theme(n))
+            theme_group.addAction(action)
+            theme_menu.addAction(action)
 
     def init_build_puzzles_status_bar(self) -> None:
         """A persistent "Build Puzzles" progress indicator in the status bar, visible
@@ -624,8 +650,10 @@ class MainWindow(QMainWindow):
 
     def open_settings_dialog(self) -> None:
         """Lets the user review/edit every setting (engine paths, puzzle-eligibility
-        depth/nodes thresholds) at any time, not just when a missing one is first needed."""
+        depth/nodes thresholds, board theme) at any time, not just when a missing
+        one is first needed."""
         self.settings.prompt()
+        self.gui_board.set_theme(self.settings["Board Theme"])
 
     def build_puzzles(self) -> None:
         """

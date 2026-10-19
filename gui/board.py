@@ -8,6 +8,7 @@ from utils.square import Square
 import gui.square
 
 from utils.constants import *
+from utils.board_themes import BOARD_THEMES, DEFAULT_BOARD_THEME
 from gui.popups import PromotionPickerDialog
 
 from PySide6.QtWidgets import QPushButton, QDialog, QGridLayout, QGraphicsRectItem, QVBoxLayout, QFrame, QSizePolicy
@@ -52,13 +53,14 @@ class Board(QDialog):
                                 # display) that depends on it without re-running an
                                 # expensive background evaluation for the same position
 
-    def __init__(self, board: chess.Board = chess.Board(), parent=None) -> None:
+    def __init__(self, board: chess.Board = chess.Board(), theme: str = DEFAULT_BOARD_THEME, parent=None) -> None:
         super(Board, self).__init__(parent)
         self.setWindowTitle("Simple Board")
 
         self._mirrored = False
         self.perspective = chess.WHITE
         self._board: chess.Board = board
+        self._light_color, self._dark_color = BOARD_THEMES.get(theme, BOARD_THEMES[DEFAULT_BOARD_THEME])
 
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
@@ -242,9 +244,17 @@ class Board(QDialog):
     def square_color(self, square: Square) -> Tuple[int, int, int]:
         """Returns the colour of the square."""
         if (square.rank_id + square.file_id) % 2 == 0:
-            return dark_gray
+            return self._dark_color
         else:
-            return light_gray
+            return self._light_color
+
+    def set_theme(self, theme: str) -> None:
+        """Switches the board's light/dark square colours to a named theme
+        (see utils/board_themes.BOARD_THEMES) and repaints immediately."""
+        if theme not in BOARD_THEMES:
+            return
+        self._light_color, self._dark_color = BOARD_THEMES[theme]
+        self.update_board_pieces_and_colours()
     
     @property
     def board(self) -> chess.Board:
